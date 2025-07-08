@@ -362,51 +362,51 @@ def main():
     app = QApplication(sys.argv)
 
     # ---- DARK THEME STYLESHEET ----
-    dark_stylesheet = """
-    QWidget {
-        background-color: #232629;
-        color: #f0f0f0;
-        font-size: 12pt;
-    }
-    QTabWidget::pane {
-        border: 1px solid #444;
-        background: #232629;
-    }
-    QTabBar::tab {
-        background: #2d2f31;
-        color: #f0f0f0;
-        border: 1px solid #444;
-        padding: 8px;
-        min-width: 100px;
-    }
-    QTabBar::tab:selected {
-        background: #393c3f;
-        color: #fff;
-    }
-    QLabel {
-        color: #f0f0f0;
-    }
-    QPushButton {
-        background-color: #393c3f;
-        color: #f0f0f0;
-        border: 1px solid #555;
-        border-radius: 4px;
-        padding: 6px 12px;
-    }
-    QPushButton:hover {
-        background-color: #505357;
-    }
-    QPushButton:pressed {
-        background-color: #232629;
-    }
-    QLineEdit, QComboBox, QSpinBox {
-        background-color: #2d2f31;
-        color: #f0f0f0;
-        border: 1px solid #555;
-        border-radius: 4px;
-    }
-    """
-    app.setStyleSheet(dark_stylesheet)
+    # dark_stylesheet = """
+    # QWidget {
+    #     background-color: #232629;
+    #     color: #f0f0f0;
+    #     font-size: 12pt;
+    # }
+    # QTabWidget::pane {
+    #     border: 1px solid #444;
+    #     background: #232629;
+    # }
+    # QTabBar::tab {
+    #     background: #2d2f31;
+    #     color: #f0f0f0;
+    #     border: 1px solid #444;
+    #     padding: 8px;
+    #     min-width: 100px;
+    # }
+    # QTabBar::tab:selected {
+    #     background: #393c3f;
+    #     color: #fff;
+    # }
+    # QLabel {
+    #     color: #f0f0f0;
+    # }
+    # QPushButton {
+    #     background-color: #393c3f;
+    #     color: #f0f0f0;
+    #     border: 1px solid #555;
+    #     border-radius: 4px;
+    #     padding: 6px 12px;
+    # }
+    # QPushButton:hover {
+    #     background-color: #505357;
+    # }
+    # QPushButton:pressed {
+    #     background-color: #232629;
+    # }
+    # QLineEdit, QComboBox, QSpinBox {
+    #     background-color: #2d2f31;
+    #     color: #f0f0f0;
+    #     border: 1px solid #555;
+    #     border-radius: 4px;
+    # }
+    # """
+    # app.setStyleSheet(dark_stylesheet)
     # ---- END DARK THEME ----
 
     system = PySpin.System.GetInstance()
