@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 #Single Cam Version
+# FLIR GigE Vision IR Camera Application
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
