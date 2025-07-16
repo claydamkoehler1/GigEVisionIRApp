@@ -171,7 +171,7 @@ def update_graph(_):
 
 anim = FuncAnimation(fig, update_graph, interval=1000, cache_frame_data=False)
 
-def camera_loop():
+def camera_loop(target_camera_index=None):
     global roi1_pts, roi2_pts, roi1_ready, roi2_ready, current_roi
     global recording, paused, current_db, last_log_time, rotation_mode
 
@@ -182,8 +182,37 @@ def camera_loop():
         system.ReleaseInstance()
         return
 
-    cam = cams[0]
-    cam.Init()
+    # Select camera by index
+    if target_camera_index is not None:
+        if target_camera_index >= cams.GetSize():
+            print(f"❌ Camera index {target_camera_index} not found!")
+            print(f"Available cameras: 0 to {cams.GetSize()-1}")
+            cams.Clear()
+            system.ReleaseInstance()
+            return
+        cam = cams[target_camera_index]
+        print(f"📷 Using camera index {target_camera_index}")
+    else:
+        # Use first available camera (original behavior)
+        cam = cams[0]
+        print("📷 Using first available camera (index 0)")
+
+    try:
+        cam.Init()
+        # Try to get camera info for display
+        try:
+            nodemap_tldevice = cam.GetTLDeviceNodeMap()
+            device_model_node = nodemap_tldevice.GetNode('DeviceModelName')
+            if device_model_node and PySpin.IsReadable(device_model_node):
+                model_name = device_model_node.GetValue()
+                print(f"📷 Camera model: {model_name}")
+        except:
+            pass
+    except Exception as e:
+        print(f"❌ Failed to initialize camera: {e}")
+        cams.Clear()
+        system.ReleaseInstance()
+        return
     cam.BeginAcquisition()
     cv2.namedWindow("FLIR Thermal Feed")
     cv2.setMouseCallback("FLIR Thermal Feed", draw_roi)
@@ -340,7 +369,11 @@ def camera_loop():
         cv2.destroyAllWindows()
 
 def main():
-    threading.Thread(target=camera_loop, daemon=True).start()
+    # Specify camera index here (0, 1, 2, etc.) or leave as None to use first available camera
+    target_camera_index = 0  # Change this to 0, 1, 2, etc. for specific camera
+    # target_camera_index = None  # Uncomment this line to use auto-detection (camera 0)
+    
+    threading.Thread(target=lambda: camera_loop(target_camera_index), daemon=True).start()
     plt.tight_layout()
     plt.show()
 
