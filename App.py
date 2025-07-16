@@ -48,8 +48,12 @@ def kelvin_to_fahrenheit(K):
     return (K - 273.15) * 9 / 5 + 32
 
 # --- Globals ---
-polygon_pts = []
-polygon_ready = False
+# Support for 2 ROIs
+roi1_pts = []
+roi2_pts = []
+roi1_ready = False
+roi2_ready = False
+current_roi = 1  # Which ROI we're currently drawing (1 or 2)
 recording = False
 paused = False
 current_db = None
@@ -91,28 +95,35 @@ def init_db(db_file):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS readings (
             timestamp TEXT,
-            temp_f_mean REAL,
-            temp_f_max REAL,
-            temp_f_min REAL
+            roi1_temp_f_mean REAL,
+            roi1_temp_f_max REAL,
+            roi1_temp_f_min REAL,
+            roi2_temp_f_mean REAL,
+            roi2_temp_f_max REAL,
+            roi2_temp_f_min REAL
         )
     """)
     conn.commit()
     conn.close()
 
-def log_to_db(ts, mean_f, max_f, min_f):
+def log_to_db(ts, roi1_mean_f, roi1_max_f, roi1_min_f, roi2_mean_f, roi2_max_f, roi2_min_f):
     global recording_started
     if not current_db:
         return
     conn = sqlite3.connect(current_db)
-    conn.execute("INSERT INTO readings VALUES (?, ?, ?, ?)", (ts, mean_f, max_f, min_f))
+    conn.execute("INSERT INTO readings VALUES (?, ?, ?, ?, ?, ?, ?)", 
+                (ts, roi1_mean_f, roi1_max_f, roi1_min_f, roi2_mean_f, roi2_max_f, roi2_min_f))
     conn.commit()
     conn.close()
     recording_started = True
 
 def draw_roi(event, x, y, flags, param):
-    global polygon_pts
+    global roi1_pts, roi2_pts, current_roi
     if event == cv2.EVENT_LBUTTONDOWN:
-        polygon_pts.append((x, y))
+        if current_roi == 1:
+            roi1_pts.append((x, y))
+        else:
+            roi2_pts.append((x, y))
 
 fig, ax = plt.subplots(figsize=(8, 4))
 timestamps, means, maxs, mins = [], [], [], []
@@ -130,17 +141,27 @@ def update_graph(_):
         return
 
     timestamps[:] = [datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S") for r in rows]
-    maxs[:] = [r[2] for r in rows]
-    mins[:] = [r[3] for r in rows]
+    # ROI 1 data (columns 1-3)
+    roi1_means = [r[1] for r in rows]
+    roi1_maxs = [r[2] for r in rows]
+    roi1_mins = [r[3] for r in rows]
+    # ROI 2 data (columns 4-6)
+    roi2_means = [r[4] for r in rows]
+    roi2_maxs = [r[5] for r in rows]
+    roi2_mins = [r[6] for r in rows]
 
-    smooth_max = smooth(maxs)
-    smooth_min = smooth(mins)
+    smooth_roi1_max = smooth(roi1_maxs)
+    smooth_roi1_min = smooth(roi1_mins)
+    smooth_roi2_max = smooth(roi2_maxs)
+    smooth_roi2_min = smooth(roi2_mins)
 
-    valid_timestamps = timestamps[len(timestamps)-len(smooth_max):]
+    valid_timestamps = timestamps[len(timestamps)-len(smooth_roi1_max):]
 
     ax.clear()
-    ax.plot(valid_timestamps, smooth_max, label="Max °F", color='red')
-    ax.plot(valid_timestamps, smooth_min, label="Min °F", color='blue')
+    ax.plot(valid_timestamps, smooth_roi1_max, label="ROI1 Max °F", color='red', linestyle='-')
+    ax.plot(valid_timestamps, smooth_roi1_min, label="ROI1 Min °F", color='blue', linestyle='-')
+    ax.plot(valid_timestamps, smooth_roi2_max, label="ROI2 Max °F", color='orange', linestyle='--')
+    ax.plot(valid_timestamps, smooth_roi2_min, label="ROI2 Min °F", color='cyan', linestyle='--')
     ax.set_title("Live ROI Calibrated Max/Min Temperature (°F)")
     ax.grid(True)
     ax.legend(loc="upper left")
@@ -151,7 +172,7 @@ def update_graph(_):
 anim = FuncAnimation(fig, update_graph, interval=1000, cache_frame_data=False)
 
 def camera_loop():
-    global polygon_pts, polygon_ready
+    global roi1_pts, roi2_pts, roi1_ready, roi2_ready, current_roi
     global recording, paused, current_db, last_log_time, rotation_mode
 
     system = PySpin.System.GetInstance()
@@ -167,8 +188,9 @@ def camera_loop():
     cv2.namedWindow("FLIR Thermal Feed")
     cv2.setMouseCallback("FLIR Thermal Feed", draw_roi)
     print("Instructions:\n"
-          " • Left-click = add vertex   • 'd' = finish ROI\n"
-          " • 'c' = clear ROI           • 'r' = start recording   • 'p' = pause\n"
+          " • Left-click = add vertex   • 'd' = finish current ROI\n"
+          " • 'c' = clear current ROI   • '1'/'2' = switch to ROI 1/2\n"
+          " • 'r' = start recording     • 'p' = pause\n"
           " • 'e' = export to CSV       • 'f' = rotate 90°        • 'q' = quit\n")
 
     try:
@@ -191,32 +213,75 @@ def camera_loop():
                 cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8),
                 cv2.COLORMAP_INFERNO)
 
-            if polygon_pts:
-                pts = np.array(polygon_pts, np.int32)
-                cv2.polylines(vis, [pts], polygon_ready, (0, 255, 0), 1)
-                for p in polygon_pts:
+            # Draw ROI 1 in green
+            if roi1_pts:
+                pts = np.array(roi1_pts, np.int32)
+                cv2.polylines(vis, [pts], roi1_ready, (0, 255, 0), 2)
+                for p in roi1_pts:
                     cv2.circle(vis, p, 3, (0, 255, 0), -1)
+                if roi1_ready:
+                    cv2.putText(vis, "ROI1", (roi1_pts[0][0], roi1_pts[0][1]-10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            if polygon_ready:
-                mask = np.zeros(frame.shape, dtype=np.uint8)
-                cv2.fillPoly(mask, [np.array(polygon_pts, np.int32)], 1)
-                roi_vals = frame[mask == 1]
-                if roi_vals.size:
-                    mean_raw = np.mean(roi_vals)
-                    max_raw = np.max(roi_vals)
-                    min_raw = np.min(roi_vals)
+            # Draw ROI 2 in cyan
+            if roi2_pts:
+                pts = np.array(roi2_pts, np.int32)
+                cv2.polylines(vis, [pts], roi2_ready, (255, 255, 0), 2)
+                for p in roi2_pts:
+                    cv2.circle(vis, p, 3, (255, 255, 0), -1)
+                if roi2_ready:
+                    cv2.putText(vis, "ROI2", (roi2_pts[0][0], roi2_pts[0][1]-10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+
+            # Calculate temperatures for both ROIs
+            roi1_temp_data = [None, None, None]  # mean, max, min
+            roi2_temp_data = [None, None, None]  # mean, max, min
+
+            if roi1_ready:
+                mask1 = np.zeros(frame.shape, dtype=np.uint8)
+                cv2.fillPoly(mask1, [np.array(roi1_pts, np.int32)], 1)
+                roi1_vals = frame[mask1 == 1]
+                if roi1_vals.size:
+                    mean_raw = np.mean(roi1_vals)
+                    max_raw = np.max(roi1_vals)
+                    min_raw = np.min(roi1_vals)
 
                     T_F_mean = kelvin_to_fahrenheit(corrected_temperature_K(raw_to_kelvin(mean_raw)))
                     T_F_max  = kelvin_to_fahrenheit(corrected_temperature_K(raw_to_kelvin(max_raw)))
                     T_F_min  = kelvin_to_fahrenheit(corrected_temperature_K(raw_to_kelvin(min_raw)))
+                    
+                    roi1_temp_data = [T_F_mean, T_F_max, T_F_min]
+                    txt = f"ROI1: {T_F_mean:.1f} F"
+                    cv2.putText(vis, txt, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                    txt = f"ROI Temp: {T_F_mean:.1f} F"
-                    cv2.putText(vis, txt, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            if roi2_ready:
+                mask2 = np.zeros(frame.shape, dtype=np.uint8)
+                cv2.fillPoly(mask2, [np.array(roi2_pts, np.int32)], 1)
+                roi2_vals = frame[mask2 == 1]
+                if roi2_vals.size:
+                    mean_raw = np.mean(roi2_vals)
+                    max_raw = np.max(roi2_vals)
+                    min_raw = np.min(roi2_vals)
 
-                    if recording and not paused and time.time() - last_log_time >= 10:
-                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        log_to_db(ts, T_F_mean, T_F_max, T_F_min)
-                        last_log_time = time.time()
+                    T_F_mean = kelvin_to_fahrenheit(corrected_temperature_K(raw_to_kelvin(mean_raw)))
+                    T_F_max  = kelvin_to_fahrenheit(corrected_temperature_K(raw_to_kelvin(max_raw)))
+                    T_F_min  = kelvin_to_fahrenheit(corrected_temperature_K(raw_to_kelvin(min_raw)))
+                    
+                    roi2_temp_data = [T_F_mean, T_F_max, T_F_min]
+                    txt = f"ROI2: {T_F_mean:.1f} F"
+                    cv2.putText(vis, txt, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
+            # Show current ROI being drawn
+            cv2.putText(vis, f"Current ROI: {current_roi}", (10, vis.shape[0]-20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            # Log data if recording
+            if recording and not paused and time.time() - last_log_time >= 10:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                log_to_db(ts, 
+                         roi1_temp_data[0] or 0, roi1_temp_data[1] or 0, roi1_temp_data[2] or 0,
+                         roi2_temp_data[0] or 0, roi2_temp_data[1] or 0, roi2_temp_data[2] or 0)
+                last_log_time = time.time()
 
             cv2.imshow("FLIR Thermal Feed", vis)
             img.Release()
@@ -227,21 +292,39 @@ def camera_loop():
             elif key == ord("f"):
                 rotation_mode = (rotation_mode + 1) % 4
                 print(f"🔄 Rotated to {rotation_mode * 90}°")
-            elif key == ord("d") and len(polygon_pts) >= 3:
-                polygon_ready = True
-                print("✅ ROI finished.")
+            elif key == ord("1"):
+                current_roi = 1
+                print("📍 Switched to ROI 1")
+            elif key == ord("2"):
+                current_roi = 2
+                print("📍 Switched to ROI 2")
+            elif key == ord("d"):
+                if current_roi == 1 and len(roi1_pts) >= 3:
+                    roi1_ready = True
+                    print("✅ ROI 1 finished.")
+                elif current_roi == 2 and len(roi2_pts) >= 3:
+                    roi2_ready = True
+                    print("✅ ROI 2 finished.")
+                else:
+                    print(f"⚠️ Need at least 3 points for ROI {current_roi}")
             elif key == ord("c"):
-                polygon_pts.clear()
-                polygon_ready = False
+                if current_roi == 1:
+                    roi1_pts.clear()
+                    roi1_ready = False
+                    print("🗑️ ROI 1 cleared.")
+                else:
+                    roi2_pts.clear()
+                    roi2_ready = False
+                    print("🗑️ ROI 2 cleared.")
             elif key == ord("r"):
-                if polygon_ready:
+                if roi1_ready or roi2_ready:
                     current_db = get_new_db_filename()
                     init_db(current_db)
                     recording, paused = True, False
                     last_log_time = 0
                     print(f"▶️ Recording → {current_db}")
                 else:
-                    print("⚠️ Finish ROI first.")
+                    print("⚠️ Finish at least one ROI first.")
             elif key == ord("p") and recording:
                 paused = not paused
                 print("⏸️ Paused" if paused else "▶️ Resumed")
