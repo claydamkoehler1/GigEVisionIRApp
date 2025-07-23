@@ -24,6 +24,8 @@ B = 1597.67
 F = 1.0
 O = 49750
 
+clay = "Clay Damkoehler"
+
 # --- Environmental Parameters ---
 EMISSIVITY = 0.95
 REFLECTED_TEMP_K = 293.15
