@@ -20,11 +20,11 @@ import math
 
 # --- FLIR Calibration Constants from SpinView ---
 R = 554118
-B = 1597.67
+B = 1492.15
 F = 1.0
-O = 49750
+O = 48667.69
 
-clay = "Clay Damkoehler"
+
 
 # --- Environmental Parameters ---
 EMISSIVITY = 0.95
