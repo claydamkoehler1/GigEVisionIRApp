@@ -6,6 +6,7 @@ import time
 import sqlite3
 import threading
 import numpy as np
+import json
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
@@ -325,6 +326,1794 @@ class GraphWidget(FigureCanvas):
         """Clear the comparison database"""
         self.comparison_db = None
 
+class TestProfileTab(QWidget):
+    """Tab for creating and managing test profiles"""
+    
+    def __init__(self):
+        super().__init__()
+        self.profiles_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Test Profiles"
+        self.setup_ui()
+        self.refresh_profiles()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Header
+        header_label = QLabel("Test Profile Management - Standardized Testing")
+        header_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #4ecdc4; margin: 10px;")
+        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(header_label)
+        
+        # Main content layout
+        content_layout = QHBoxLayout()
+        
+        # Left panel - Profile management
+        left_panel = QVBoxLayout()
+        
+        # Profile actions group
+        actions_group = QGroupBox("Profile Actions")
+        actions_layout = QVBoxLayout(actions_group)
+        
+        self.new_profile_btn = QPushButton("Create New Test Profile")
+        self.new_profile_btn.clicked.connect(self.create_new_profile)
+        self.new_profile_btn.setStyleSheet("font-size: 12px; padding: 12px;")
+        actions_layout.addWidget(self.new_profile_btn)
+        
+        self.edit_profile_btn = QPushButton("Edit Selected Profile")
+        self.edit_profile_btn.clicked.connect(self.edit_selected_profile)
+        self.edit_profile_btn.setEnabled(False)
+        actions_layout.addWidget(self.edit_profile_btn)
+        
+        self.delete_profile_btn = QPushButton("Delete Selected Profile")
+        self.delete_profile_btn.clicked.connect(self.delete_selected_profile)
+        self.delete_profile_btn.setEnabled(False)
+        self.delete_profile_btn.setStyleSheet("background-color: #e74c3c;")
+        actions_layout.addWidget(self.delete_profile_btn)
+        
+        left_panel.addWidget(actions_group)
+        
+        # Existing profiles group
+        profiles_group = QGroupBox("Existing Test Profiles")
+        profiles_layout = QVBoxLayout(profiles_group)
+        
+        # Refresh button
+        refresh_btn = QPushButton("Refresh Profiles")
+        refresh_btn.clicked.connect(self.refresh_profiles)
+        profiles_layout.addWidget(refresh_btn)
+        
+        # Profiles list
+        self.profiles_list = QListWidget()
+        self.profiles_list.setStyleSheet("""
+            QListWidget {
+                background-color: #2b2b2b;
+                color: white;
+                border: 2px solid #444;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #444;
+            }
+            QListWidget::item:selected {
+                background-color: #0d7377;
+            }
+            QListWidget::item:hover {
+                background-color: #14a085;
+            }
+        """)
+        self.profiles_list.itemSelectionChanged.connect(self.on_profile_selected)
+        profiles_layout.addWidget(self.profiles_list)
+        
+        left_panel.addWidget(profiles_group)
+        
+        # Status
+        self.status_label = QLabel("Ready to create or manage test profiles")
+        self.status_label.setStyleSheet("color: #ffd93d; font-weight: bold; padding: 10px;")
+        left_panel.addWidget(self.status_label)
+        
+        content_layout.addLayout(left_panel, 1)
+        
+        # Right panel - Profile details
+        right_panel = QVBoxLayout()
+        
+        # Profile details group
+        details_group = QGroupBox("Profile Details")
+        details_layout = QVBoxLayout(details_group)
+        
+        self.details_text = QLabel("Select a profile to view details")
+        self.details_text.setStyleSheet("color: #bbb; font-size: 11px; padding: 10px;")
+        self.details_text.setWordWrap(True)
+        self.details_text.setAlignment(Qt.AlignmentFlag.AlignTop)
+        details_layout.addWidget(self.details_text)
+        
+        right_panel.addWidget(details_group)
+        
+        # Instructions
+        instructions_group = QGroupBox("Instructions")
+        instructions_layout = QVBoxLayout(instructions_group)
+        instructions_text = QLabel(
+            "Test Profile Workflow:\n\n"
+            "1. Create New Profile: Define profile name and custom variables\n"
+            "2. Add Variables: Specify variable names, data types, and optional default values\n"
+            "3. Save Profile: Profile becomes available for use in Live Recording\n"
+            "4. Use Profile: Select profile in Live Recording tab to prompt for variable values\n\n"
+            "Supported Data Types:\n"
+            "• String: Text values (e.g., color, operator name)\n"
+            "• Number: Numeric values (e.g., temperature, pressure)\n"
+            "• Boolean: True/False values (e.g., pre-heated, cleaned)\n"
+            "• Date: Date values (e.g., sample date, calibration date)"
+        )
+        instructions_text.setWordWrap(True)
+        instructions_text.setStyleSheet("color: #bbb; font-size: 10px;")
+        instructions_layout.addWidget(instructions_text)
+        right_panel.addWidget(instructions_group)
+        
+        content_layout.addLayout(right_panel, 1)
+        
+        layout.addLayout(content_layout)
+    
+    def refresh_profiles(self):
+        """Refresh the list of available test profiles"""
+        self.profiles_list.clear()
+        
+        # Ensure profiles directory exists
+        os.makedirs(self.profiles_dir, exist_ok=True)
+        
+        try:
+            profile_files = [f for f in os.listdir(self.profiles_dir) if f.endswith('.json')]
+            
+            if not profile_files:
+                self.status_label.setText("No test profiles found - create your first profile!")
+                return
+            
+            for profile_file in sorted(profile_files):
+                profile_path = os.path.join(self.profiles_dir, profile_file)
+                try:
+                    with open(profile_path, 'r') as f:
+                        profile_data = json.load(f)
+                    
+                    profile_name = profile_data.get('name', 'Unknown')
+                    var_count = len(profile_data.get('variables', []))
+                    created_date = profile_data.get('created_date', 'Unknown')
+                    
+                    item_text = f"{profile_name} ({var_count} variables, created: {created_date})"
+                    item = QListWidgetItem(item_text)
+                    item.setData(Qt.ItemDataRole.UserRole, profile_path)
+                    self.profiles_list.addItem(item)
+                    
+                except Exception as e:
+                    print(f"Error reading profile {profile_file}: {e}")
+            
+            self.status_label.setText(f"Found {len(profile_files)} test profiles")
+            
+        except Exception as e:
+            self.status_label.setText(f"Error loading profiles: {str(e)}")
+    
+    def on_profile_selected(self):
+        """Handle profile selection"""
+        selected_items = self.profiles_list.selectedItems()
+        
+        if selected_items:
+            self.edit_profile_btn.setEnabled(True)
+            self.delete_profile_btn.setEnabled(True)
+            
+            # Load and display profile details
+            profile_path = selected_items[0].data(Qt.ItemDataRole.UserRole)
+            self.display_profile_details(profile_path)
+        else:
+            self.edit_profile_btn.setEnabled(False)
+            self.delete_profile_btn.setEnabled(False)
+            self.details_text.setText("Select a profile to view details")
+    
+    def display_profile_details(self, profile_path):
+        """Display details of the selected profile"""
+        try:
+            with open(profile_path, 'r') as f:
+                profile_data = json.load(f)
+            
+            details = f"PROFILE: {profile_data.get('name', 'Unknown')}\n\n"
+            details += f"Description: {profile_data.get('description', 'No description')}\n"
+            details += f"Created: {profile_data.get('created_date', 'Unknown')}\n"
+            details += f"Last Modified: {profile_data.get('modified_date', 'Unknown')}\n\n"
+            
+            variables = profile_data.get('variables', [])
+            if variables:
+                details += "CUSTOM VARIABLES:\n"
+                for var in variables:
+                    details += f"• {var['name']} ({var['type']})"
+                    if var.get('default_value'):
+                        details += f" - Default: {var['default_value']}"
+                    if var.get('description'):
+                        details += f"\n  Description: {var['description']}"
+                    details += "\n"
+            else:
+                details += "No custom variables defined\n"
+            
+            self.details_text.setText(details)
+            
+        except Exception as e:
+            self.details_text.setText(f"Error loading profile details: {str(e)}")
+    
+    def create_new_profile(self):
+        """Open the profile creation wizard"""
+        wizard = TestProfileWizard(self)
+        if wizard.exec() == QDialog.DialogCode.Accepted:
+            self.refresh_profiles()
+            self.status_label.setText("New test profile created successfully!")
+    
+    def edit_selected_profile(self):
+        """Edit the selected profile"""
+        selected_items = self.profiles_list.selectedItems()
+        if not selected_items:
+            return
+        
+        profile_path = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        wizard = TestProfileWizard(self, profile_path)
+        if wizard.exec() == QDialog.DialogCode.Accepted:
+            self.refresh_profiles()
+            self.status_label.setText("Test profile updated successfully!")
+    
+    def delete_selected_profile(self):
+        """Delete the selected profile"""
+        selected_items = self.profiles_list.selectedItems()
+        if not selected_items:
+            return
+        
+        profile_path = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        profile_name = os.path.basename(profile_path).replace('.json', '')
+        
+        # Confirmation dialog
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Delete Test Profile")
+        msg.setText(f"Are you sure you want to delete the test profile '{profile_name}'?")
+        msg.setInformativeText("This action cannot be undone.")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        msg.setStyleSheet(self.parent().parent().styleSheet())
+        
+        if msg.exec() == QMessageBox.StandardButton.Yes:
+            try:
+                os.remove(profile_path)
+                self.refresh_profiles()
+                self.status_label.setText(f"Test profile '{profile_name}' deleted successfully!")
+            except Exception as e:
+                self.status_label.setText(f"Error deleting profile: {str(e)}")
+
+class TestProfileWizard(QDialog):
+    """Wizard for creating and editing test profiles"""
+    
+    def __init__(self, parent=None, profile_path=None):
+        super().__init__(parent)
+        self.profile_path = profile_path
+        self.is_editing = profile_path is not None
+        self.variables = []
+        
+        self.setWindowTitle("Test Profile Wizard" if not self.is_editing else "Edit Test Profile")
+        self.setModal(True)
+        self.resize(600, 500)
+        
+        # Apply comprehensive dark theme styling
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #2b2b2b;
+                color: white;
+            }
+            QLabel {
+                color: white;
+                background-color: transparent;
+            }
+            QLineEdit {
+                background-color: #444;
+                color: black;
+                border: 2px solid #666;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 11px;
+                selection-background-color: #0d7377;
+                selection-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #0d7377;
+                background-color: white;
+                color: black;
+            }
+            QTextEdit {
+                background-color: #444;
+                color: black;
+                border: 2px solid #666;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 11px;
+            }
+            QTextEdit:focus {
+                border-color: #0d7377;
+            }
+            QGroupBox {
+                color: white;
+                border: 2px solid #444;
+                border-radius: 5px;
+                margin-top: 10px;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+                color: #4ecdc4;
+            }
+            QPushButton {
+                background-color: #0d7377;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #14a085;
+            }
+            QPushButton:pressed {
+                background-color: #0a5d61;
+            }
+            QScrollArea {
+                background-color: #333;
+                border: 1px solid #444;
+            }
+            QScrollBar:vertical {
+                background-color: #444;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #666;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #777;
+            }
+        """)
+        
+        self.setup_ui()
+        
+        # Load existing profile if editing
+        if self.is_editing:
+            self.load_existing_profile()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Header
+        header_text = "Edit Test Profile" if self.is_editing else "Create New Test Profile"
+        header_label = QLabel(header_text)
+        header_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #4ecdc4; margin: 10px;")
+        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(header_label)
+        
+        # Basic info group
+        basic_group = QGroupBox("Basic Information")
+        basic_layout = QFormLayout(basic_group)
+        
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Enter profile name (e.g., 'Color Analysis Test')")
+        basic_layout.addRow("Profile Name:", self.name_input)
+        
+        self.description_input = QTextEdit()
+        self.description_input.setPlaceholderText("Enter profile description (optional)")
+        self.description_input.setMaximumHeight(60)
+        basic_layout.addRow("Description:", self.description_input)
+        
+        layout.addWidget(basic_group)
+        
+        # Variables group
+        variables_group = QGroupBox("Custom Variables")
+        variables_layout = QVBoxLayout(variables_group)
+        
+        # Add variable button
+        add_var_btn = QPushButton("Add New Variable")
+        add_var_btn.clicked.connect(self.add_variable)
+        variables_layout.addWidget(add_var_btn)
+        
+        # Variables list
+        self.variables_widget = QScrollArea()
+        self.variables_widget.setWidgetResizable(True)
+        self.variables_widget.setMaximumHeight(200)
+        
+        self.variables_container = QWidget()
+        self.variables_layout = QVBoxLayout(self.variables_container)
+        self.variables_widget.setWidget(self.variables_container)
+        
+        variables_layout.addWidget(self.variables_widget)
+        
+        layout.addWidget(variables_group)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.cancel_btn)
+        
+        button_layout.addStretch()
+        
+        save_text = "Update Profile" if self.is_editing else "Create Profile"
+        self.save_btn = QPushButton(save_text)
+        self.save_btn.clicked.connect(self.save_profile)
+        self.save_btn.setStyleSheet("background-color: #0d7377; font-weight: bold;")
+        button_layout.addWidget(self.save_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def load_existing_profile(self):
+        """Load existing profile data for editing"""
+        try:
+            with open(self.profile_path, 'r') as f:
+                profile_data = json.load(f)
+            
+            self.name_input.setText(profile_data.get('name', ''))
+            self.description_input.setPlainText(profile_data.get('description', ''))
+            
+            self.variables = profile_data.get('variables', [])
+            self.refresh_variables_display()
+            
+        except Exception as e:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to load profile: {str(e)}")
+            msg_box.setStyleSheet("""
+                QMessageBox {
+                    background-color: #2b2b2b;
+                    color: white;
+                }
+                QMessageBox QLabel {
+                    color: white;
+                }
+                QMessageBox QPushButton {
+                    background-color: #0d7377;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #14a085;
+                }
+            """)
+            msg_box.exec()
+    
+    def add_variable(self):
+        """Add a new variable to the profile"""
+        dialog = VariableDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            var_data = dialog.get_variable_data()
+            self.variables.append(var_data)
+            self.refresh_variables_display()
+    
+    def refresh_variables_display(self):
+        """Refresh the variables display"""
+        # Clear existing widgets
+        for i in reversed(range(self.variables_layout.count())):
+            child = self.variables_layout.itemAt(i).widget()
+            if child:
+                child.setParent(None)
+        
+        # Add variable widgets
+        for i, var in enumerate(self.variables):
+            var_widget = self.create_variable_widget(var, i)
+            self.variables_layout.addWidget(var_widget)
+        
+        # Add stretch to push everything to top
+        self.variables_layout.addStretch()
+    
+    def create_variable_widget(self, var_data, index):
+        """Create a widget to display a variable"""
+        widget = QFrame()
+        widget.setFrameStyle(QFrame.Shape.Box)
+        widget.setStyleSheet("""
+            QFrame { 
+                border: 1px solid #444; 
+                padding: 5px; 
+                margin: 2px; 
+                background-color: white;
+            }
+            QLabel {
+                color: black;
+                background-color: transparent;
+            }
+        """)
+        
+        layout = QHBoxLayout(widget)
+        
+        # Variable info
+        info_text = f"{var_data['name']} ({var_data['type']})"
+        if var_data.get('default_value'):
+            info_text += f" - Default: {var_data['default_value']}"
+        if var_data.get('end_of_cycle', False):
+            info_text += " [END-OF-CYCLE]"
+        
+        info_label = QLabel(info_text)
+        layout.addWidget(info_label)
+        
+        layout.addStretch()
+        
+        # Edit button
+        edit_btn = QPushButton("Edit")
+        edit_btn.setMaximumWidth(60)
+        edit_btn.clicked.connect(lambda: self.edit_variable(index))
+        layout.addWidget(edit_btn)
+        
+        # Delete button
+        delete_btn = QPushButton("Delete")
+        delete_btn.setMaximumWidth(60)
+        delete_btn.setStyleSheet("background-color: #e74c3c;")
+        delete_btn.clicked.connect(lambda: self.delete_variable(index))
+        layout.addWidget(delete_btn)
+        
+        return widget
+    
+    def edit_variable(self, index):
+        """Edit an existing variable"""
+        if 0 <= index < len(self.variables):
+            dialog = VariableDialog(self, self.variables[index])
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.variables[index] = dialog.get_variable_data()
+                self.refresh_variables_display()
+    
+    def delete_variable(self, index):
+        """Delete a variable"""
+        if 0 <= index < len(self.variables):
+            var_name = self.variables[index]['name']
+            reply = QMessageBox(self)
+            reply.setIcon(QMessageBox.Icon.Question)
+            reply.setWindowTitle("Delete Variable")
+            reply.setText(f"Are you sure you want to delete the variable '{var_name}'?")
+            reply.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            reply.setDefaultButton(QMessageBox.StandardButton.No)
+            reply.setStyleSheet("""
+                QMessageBox {
+                    background-color: #2b2b2b;
+                    color: white;
+                }
+                QMessageBox QLabel {
+                    color: white;
+                }
+                QMessageBox QPushButton {
+                    background-color: #0d7377;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #14a085;
+                }
+            """)
+            result = reply.exec()
+            
+            if result == QMessageBox.StandardButton.Yes:
+                del self.variables[index]
+                self.refresh_variables_display()
+    
+    def save_profile(self):
+        """Save the test profile"""
+        profile_name = self.name_input.text().strip()
+        if not profile_name:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Warning")
+            msg_box.setText("Please enter a profile name.")
+            msg_box.setStyleSheet("""
+                QMessageBox {
+                    background-color: #2b2b2b;
+                    color: white;
+                }
+                QMessageBox QLabel {
+                    color: white;
+                }
+                QMessageBox QPushButton {
+                    background-color: #0d7377;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #14a085;
+                }
+            """)
+            msg_box.exec()
+            return
+        
+        # Prepare profile data
+        profile_data = {
+            'name': profile_name,
+            'description': self.description_input.toPlainText().strip(),
+            'variables': self.variables,
+            'created_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S") if not self.is_editing else None,
+            'modified_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # If editing, preserve the original creation date
+        if self.is_editing and self.profile_path:
+            try:
+                with open(self.profile_path, 'r') as f:
+                    existing_data = json.load(f)
+                profile_data['created_date'] = existing_data.get('created_date', profile_data['created_date'])
+            except:
+                pass
+        
+        # Save to file
+        try:
+            profiles_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Test Profiles"
+            os.makedirs(profiles_dir, exist_ok=True)
+            
+            # Create safe filename
+            safe_name = "".join(c for c in profile_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+            safe_name = safe_name.replace(' ', '_')
+            
+            if self.is_editing and self.profile_path:
+                file_path = self.profile_path
+            else:
+                file_path = os.path.join(profiles_dir, f"{safe_name}.json")
+            
+            # Check if file exists (for new profiles)
+            if not self.is_editing and os.path.exists(file_path):
+                reply = QMessageBox(self)
+                reply.setIcon(QMessageBox.Icon.Question)
+                reply.setWindowTitle("File Exists")
+                reply.setText("A profile with this name already exists. Overwrite?")
+                reply.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                reply.setDefaultButton(QMessageBox.StandardButton.No)
+                reply.setStyleSheet("""
+                    QMessageBox {
+                        background-color: #2b2b2b;
+                        color: white;
+                    }
+                    QMessageBox QLabel {
+                        color: white;
+                    }
+                    QMessageBox QPushButton {
+                        background-color: #0d7377;
+                        color: white;
+                        border: none;
+                        padding: 8px 16px;
+                        border-radius: 4px;
+                        font-weight: bold;
+                    }
+                    QMessageBox QPushButton:hover {
+                        background-color: #14a085;
+                    }
+                """)
+                result = reply.exec()
+                if result != QMessageBox.StandardButton.Yes:
+                    return
+            
+            with open(file_path, 'w') as f:
+                json.dump(profile_data, f, indent=2)
+            
+            self.accept()
+            
+        except Exception as e:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to save profile: {str(e)}")
+            msg_box.setStyleSheet("""
+                QMessageBox {
+                    background-color: #2b2b2b;
+                    color: white;
+                }
+                QMessageBox QLabel {
+                    color: white;
+                }
+                QMessageBox QPushButton {
+                    background-color: #0d7377;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #14a085;
+                }
+            """)
+            msg_box.exec()
+
+class VariableDialog(QDialog):
+    """Dialog for adding/editing custom variables"""
+    
+    def __init__(self, parent=None, variable_data=None):
+        super().__init__(parent)
+        self.variable_data = variable_data or {}
+        self.is_editing = variable_data is not None
+        
+        self.setWindowTitle("Edit Variable" if self.is_editing else "Add Variable")
+        self.setModal(True)
+        self.resize(400, 300)
+        
+        # Apply comprehensive dark theme styling
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #2b2b2b;
+                color: white;
+            }
+            QLabel {
+                color: white;
+                background-color: transparent;
+                font-weight: bold;
+                margin: 5px 0px 2px 0px;
+            }
+            QLineEdit {
+                background-color: #444;
+                color: black;
+                border: 2px solid #666;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 11px;
+                selection-background-color: #0d7377;
+                selection-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #0d7377;
+                background-color: white;
+                color: black;
+            }
+            QTextEdit {
+                background-color: #444;
+                color: black;
+                border: 2px solid #666;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 11px;
+                selection-background-color: #0d7377;
+                selection-color: white;
+            }
+            QTextEdit:focus {
+                border-color: #0d7377;
+                background-color: white;
+                color: black;
+            }
+            QComboBox {
+                background-color: #444;
+                color: white;
+                border: 2px solid #666;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 11px;
+                min-width: 100px;
+            }
+            QComboBox:focus {
+                border-color: #0d7377;
+            }
+            QComboBox::drop-down {
+                border: none;
+                background-color: #555;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid white;
+                width: 0px;
+                height: 0px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #444;
+                color: white;
+                selection-background-color: #0d7377;
+                border: 1px solid #666;
+            }
+            QPushButton {
+                background-color: #0d7377;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #14a085;
+            }
+            QPushButton:pressed {
+                background-color: #0a5d61;
+            }
+        """)
+        
+        self.setup_ui()
+        
+        if self.is_editing:
+            self.load_variable_data()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Variable name
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Enter variable name (e.g., 'Color', 'Operator')")
+        layout.addWidget(QLabel("Variable Name:"))
+        layout.addWidget(self.name_input)
+        
+        # Data type
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["String", "Number", "Boolean", "Date"])
+        layout.addWidget(QLabel("Data Type:"))
+        layout.addWidget(self.type_combo)
+        
+        # Default value
+        self.default_input = QLineEdit()
+        self.default_input.setPlaceholderText("Optional default value")
+        layout.addWidget(QLabel("Default Value (Optional):"))
+        layout.addWidget(self.default_input)
+        
+        # Description
+        self.description_input = QTextEdit()
+        self.description_input.setPlaceholderText("Optional description or instructions")
+        self.description_input.setMaximumHeight(80)
+        layout.addWidget(QLabel("Description (Optional):"))
+        layout.addWidget(self.description_input)
+        
+        # End of cycle checkbox
+        self.end_of_cycle_checkbox = QCheckBox("End-of-Cycle Variable")
+        self.end_of_cycle_checkbox.setToolTip("Check this if the variable should be entered at the END of the recording cycle (e.g., final quality, completion status)")
+        layout.addWidget(self.end_of_cycle_checkbox)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        button_layout.addStretch()
+        
+        save_btn = QPushButton("Save Variable")
+        save_btn.clicked.connect(self.save_variable)
+        save_btn.setStyleSheet("background-color: #0d7377; font-weight: bold;")
+        button_layout.addWidget(save_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def load_variable_data(self):
+        """Load existing variable data for editing"""
+        self.name_input.setText(self.variable_data.get('name', ''))
+        
+        var_type = self.variable_data.get('type', 'String')
+        index = self.type_combo.findText(var_type)
+        if index >= 0:
+            self.type_combo.setCurrentIndex(index)
+        
+        self.default_input.setText(str(self.variable_data.get('default_value', '')))
+        self.description_input.setPlainText(self.variable_data.get('description', ''))
+        
+        # Load end-of-cycle setting
+        self.end_of_cycle_checkbox.setChecked(self.variable_data.get('end_of_cycle', False))
+    
+    def save_variable(self):
+        """Save the variable"""
+        name = self.name_input.text().strip()
+        if not name:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Warning")
+            msg_box.setText("Please enter a variable name.")
+            msg_box.setStyleSheet("""
+                QMessageBox {
+                    background-color: #2b2b2b;
+                    color: white;
+                }
+                QMessageBox QLabel {
+                    color: white;
+                }
+                QMessageBox QPushButton {
+                    background-color: #0d7377;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #14a085;
+                }
+            """)
+            msg_box.exec()
+            return
+        
+        self.accept()
+    
+    def get_variable_data(self):
+        """Get the variable data"""
+        return {
+            'name': self.name_input.text().strip(),
+            'type': self.type_combo.currentText(),
+            'default_value': self.default_input.text().strip(),
+            'description': self.description_input.toPlainText().strip(),
+            'end_of_cycle': self.end_of_cycle_checkbox.isChecked()
+        }
+
+class EndOfCycleDialog(QDialog):
+    """Dialog for collecting end-of-cycle variables when recording stops"""
+    
+    def __init__(self, parent, end_of_cycle_variables):
+        super().__init__(parent)
+        self.end_of_cycle_variables = end_of_cycle_variables
+        self.variable_inputs = {}
+        
+        self.setWindowTitle("End-of-Cycle Variables")
+        self.setModal(True)
+        self.resize(500, 400)
+        
+        # Apply comprehensive dark theme styling
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #2b2b2b;
+                color: white;
+            }
+            QLabel {
+                color: white;
+                background-color: transparent;
+            }
+            QLineEdit {
+                background-color: #444;
+                color: black;
+                border: 2px solid #666;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 11px;
+                selection-background-color: #0d7377;
+                selection-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #0d7377;
+                background-color: white;
+                color: black;
+            }
+            QCheckBox {
+                color: white;
+                font-size: 11px;
+            }
+            QCheckBox::indicator {
+                background-color: #2b2b2b;
+                border: 2px solid #444;
+                border-radius: 3px;
+                width: 16px;
+                height: 16px;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #0d7377;
+                border-color: #0d7377;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #14a085;
+            }
+            QGroupBox {
+                color: white;
+                border: 2px solid #444;
+                border-radius: 5px;
+                margin-top: 10px;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+                color: #4ecdc4;
+            }
+            QPushButton {
+                background-color: #0d7377;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #14a085;
+            }
+            QPushButton:pressed {
+                background-color: #0a5d61;
+            }
+            QScrollArea {
+                background-color: #333;
+                border: 1px solid #444;
+            }
+            QScrollBar:vertical {
+                background-color: #444;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #666;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #777;
+            }
+        """)
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Header
+        header_label = QLabel("Recording Complete - Enter End-of-Cycle Variables")
+        header_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #4ecdc4; margin: 10px;")
+        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(header_label)
+        
+        # Instructions
+        instructions = QLabel("Please fill in the following variables that are measured at the end of the test cycle:")
+        instructions.setStyleSheet("color: #bbb; font-size: 11px; margin: 10px; padding: 10px;")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Variables group
+        variables_group = QGroupBox("End-of-Cycle Variables")
+        variables_layout = QVBoxLayout(variables_group)
+        
+        # Create input fields for each end-of-cycle variable
+        for var in self.end_of_cycle_variables:
+            var_name = var['name']
+            var_type = var['type']
+            default_value = var.get('default_value', '')
+            description = var.get('description', '')
+            
+            # Create input widget based on type
+            if var_type == "Boolean":
+                input_widget = QCheckBox()
+                if default_value.lower() in ['true', '1', 'yes']:
+                    input_widget.setChecked(True)
+            elif var_type == "Date":
+                input_widget = QLineEdit()
+                input_widget.setPlaceholderText("YYYY-MM-DD or leave blank for today")
+                if default_value:
+                    input_widget.setText(default_value)
+            elif var_type == "Number":
+                input_widget = QLineEdit()
+                input_widget.setPlaceholderText("Enter numeric value")
+                if default_value:
+                    input_widget.setText(str(default_value))
+            else:  # String
+                input_widget = QLineEdit()
+                input_widget.setPlaceholderText("Enter text value")
+                if default_value:
+                    input_widget.setText(str(default_value))
+            
+            # Add label and input
+            label_text = f"{var_name} ({var_type}):"
+            if description:
+                label_text += f"\n{description}"
+            
+            label = QLabel(label_text)
+            label.setWordWrap(True)
+            variables_layout.addWidget(label)
+            variables_layout.addWidget(input_widget)
+            
+            self.variable_inputs[var_name] = {
+                'widget': input_widget,
+                'type': var_type
+            }
+        
+        layout.addWidget(variables_group)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        skip_btn = QPushButton("Skip (No Values)")
+        skip_btn.clicked.connect(self.reject)
+        skip_btn.setStyleSheet("background-color: #666;")
+        button_layout.addWidget(skip_btn)
+        
+        button_layout.addStretch()
+        
+        save_btn = QPushButton("Save Values")
+        save_btn.clicked.connect(self.accept)
+        save_btn.setStyleSheet("background-color: #0d7377; font-weight: bold;")
+        button_layout.addWidget(save_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def get_variable_values(self):
+        """Get the values entered for end-of-cycle variables"""
+        values = {}
+        
+        for var_name, input_info in self.variable_inputs.items():
+            widget = input_info['widget']
+            var_type = input_info['type']
+            
+            if var_type == "Boolean":
+                values[var_name] = widget.isChecked()
+            elif var_type == "Date":
+                date_text = widget.text().strip()
+                if not date_text:
+                    values[var_name] = datetime.now().strftime("%Y-%m-%d")
+                else:
+                    values[var_name] = date_text
+            elif var_type == "Number":
+                try:
+                    num_text = widget.text().strip()
+                    values[var_name] = float(num_text) if num_text else 0.0
+                except ValueError:
+                    values[var_name] = 0.0
+            else:  # String
+                values[var_name] = widget.text().strip()
+        
+        return values
+
+class DataAnalysisTab(QWidget):
+    """Tab for analyzing all database files"""
+    
+    def __init__(self):
+        super().__init__()
+        self.db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+        self.selected_databases = []
+        self.setup_ui()
+        self.refresh_database_list()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Header
+        header_label = QLabel("Data Analysis - Compare Multiple Runs")
+        header_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #4ecdc4; margin: 10px;")
+        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(header_label)
+        
+        # Main content layout
+        content_layout = QHBoxLayout()
+        
+        # Left panel - Database selection
+        left_panel = QVBoxLayout()
+        
+        # Database list group
+        db_group = QGroupBox("Available Database Files")
+        db_layout = QVBoxLayout(db_group)
+        
+        # Refresh button
+        refresh_btn = QPushButton("Refresh Database List")
+        refresh_btn.clicked.connect(self.refresh_database_list)
+        db_layout.addWidget(refresh_btn)
+        
+        # Database list
+        self.db_list = QListWidget()
+        self.db_list.setStyleSheet("""
+            QListWidget {
+                background-color: #2b2b2b;
+                color: white;
+                border: 2px solid #444;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            QListWidget::item {
+                padding: 5px;
+                border-bottom: 1px solid #444;
+            }
+            QListWidget::item:selected {
+                background-color: #0d7377;
+            }
+            QListWidget::item:hover {
+                background-color: #14a085;
+            }
+        """)
+        self.db_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        db_layout.addWidget(self.db_list)
+        
+        # Control buttons
+        btn_layout = QHBoxLayout()
+        
+        self.select_all_btn = QPushButton("Select All")
+        self.select_all_btn.clicked.connect(self.select_all_databases)
+        btn_layout.addWidget(self.select_all_btn)
+        
+        self.clear_selection_btn = QPushButton("Clear Selection")
+        self.clear_selection_btn.clicked.connect(self.clear_selection)
+        btn_layout.addWidget(self.clear_selection_btn)
+        
+        db_layout.addLayout(btn_layout)
+        
+        # Analysis buttons
+        analysis_layout = QVBoxLayout()
+        
+        self.compare_btn = QPushButton("Analyze Selected Runs")
+        self.compare_btn.clicked.connect(self.compare_selected_runs)
+        analysis_layout.addWidget(self.compare_btn)
+        
+        self.statistics_btn = QPushButton("Generate Statistics Report")
+        self.statistics_btn.clicked.connect(self.generate_statistics)
+        analysis_layout.addWidget(self.statistics_btn)
+        
+        self.export_combined_btn = QPushButton("Export Combined CSV")
+        self.export_combined_btn.clicked.connect(self.export_combined_csv)
+        analysis_layout.addWidget(self.export_combined_btn)
+        
+        db_layout.addLayout(analysis_layout)
+        
+        left_panel.addWidget(db_group)
+        
+        # Status and info
+        self.info_label = QLabel("Select database files to analyze")
+        self.info_label.setStyleSheet("color: #ffd93d; font-weight: bold; padding: 10px;")
+        left_panel.addWidget(self.info_label)
+        
+        content_layout.addLayout(left_panel, 1)
+        
+        # Right panel - Analysis results
+        right_panel = QVBoxLayout()
+        
+        # Analysis graph
+        analysis_group = QGroupBox("Analysis Results")
+        analysis_layout = QVBoxLayout(analysis_group)
+        
+        self.analysis_graph = GraphWidget()
+        analysis_layout.addWidget(self.analysis_graph)
+        
+        right_panel.addWidget(analysis_group)
+        
+        # Statistics display
+        stats_group = QGroupBox("Statistics Summary")
+        stats_layout = QVBoxLayout(stats_group)
+        
+        self.stats_text = QLabel("No analysis performed yet")
+        self.stats_text.setStyleSheet("color: #bbb; font-size: 10px; padding: 10px;")
+        self.stats_text.setWordWrap(True)
+        self.stats_text.setAlignment(Qt.AlignmentFlag.AlignTop)
+        stats_layout.addWidget(self.stats_text)
+        
+        right_panel.addWidget(stats_group)
+        
+        content_layout.addLayout(right_panel, 2)
+        
+        layout.addLayout(content_layout)
+    
+    def refresh_database_list(self):
+        """Refresh the list of available database files from all profile subdirectories"""
+        self.db_list.clear()
+        
+        if not os.path.exists(self.db_dir):
+            self.info_label.setText("Database directory not found")
+            return
+        
+        try:
+            total_db_files = 0
+            
+            # Search in base directory and all subdirectories (profile folders)
+            for root, dirs, files in os.walk(self.db_dir):
+                db_files = [f for f in files if f.endswith('.db')]
+                
+                if db_files:
+                    # Determine the profile name from the directory structure
+                    rel_path = os.path.relpath(root, self.db_dir)
+                    if rel_path == '.':
+                        profile_prefix = "[No Profile] "
+                    else:
+                        profile_prefix = f"[{rel_path}] "
+                    
+                    for db_file in sorted(db_files):
+                        # Get file info
+                        file_path = os.path.join(root, db_file)
+                        file_size = os.path.getsize(file_path)
+                        mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                        
+                        # Check if database has data
+                        try:
+                            conn = sqlite3.connect(file_path)
+                            count = conn.execute("SELECT COUNT(*) FROM readings").fetchone()[0]
+                            conn.close()
+                            
+                            item_text = f"{profile_prefix}{db_file} ({count} readings, {mod_time.strftime('%Y-%m-%d %H:%M')})"
+                            item = QListWidgetItem(item_text)
+                            item.setData(Qt.ItemDataRole.UserRole, file_path)  # Store full path
+                            self.db_list.addItem(item)
+                            total_db_files += 1
+                            
+                        except Exception as e:
+                            print(f"Error reading database {db_file}: {e}")
+            
+            if total_db_files == 0:
+                self.info_label.setText("No database files found in any profile")
+            else:
+                self.info_label.setText(f"Found {total_db_files} database files across all profiles")
+            
+        except Exception as e:
+            self.info_label.setText(f"Error loading database list: {str(e)}")
+    
+    def select_all_databases(self):
+        """Select all database files"""
+        for i in range(self.db_list.count()):
+            self.db_list.item(i).setSelected(True)
+    
+    def clear_selection(self):
+        """Clear all selections"""
+        self.db_list.clearSelection()
+    
+    def get_selected_databases(self):
+        """Get list of selected database file paths"""
+        selected = []
+        for item in self.db_list.selectedItems():
+            selected.append(item.data(Qt.ItemDataRole.UserRole))
+        return selected
+    
+    def compare_selected_runs(self):
+        """Analyze selected database runs (single run or comparison)"""
+        selected_dbs = self.get_selected_databases()
+        
+        if not selected_dbs:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Warning")
+            msg.setText("Please select at least 1 database file to analyze")
+            msg.setStyleSheet(self.parent().parent().styleSheet())  # Use main app styling
+            msg.exec()
+            return
+        
+        if len(selected_dbs) == 1:
+            # Single run analysis
+            self.analyze_single_run(selected_dbs[0])
+        else:
+            # Multi-run comparison
+            self.plot_comparison(selected_dbs)
+    
+    def analyze_single_run(self, db_path):
+        """Analyze a single database run with detailed statistics"""
+        try:
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute("SELECT * FROM readings ORDER BY ROWID ASC").fetchall()
+            conn.close()
+            
+            if not rows:
+                self.info_label.setText("Selected database contains no data")
+                return
+            
+            timestamps = [datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S") for r in rows]
+            means = [r[1] for r in rows]
+            maxs = [r[2] for r in rows]
+            mins = [r[3] for r in rows]
+            
+            # Convert to minutes from start
+            start_time = timestamps[0]
+            time_minutes = [(t - start_time).total_seconds() / 60 for t in timestamps]
+            
+            # Apply smoothing
+            smooth_means = smooth(means)
+            smooth_maxs = smooth(maxs)
+            smooth_mins = smooth(mins)
+            
+            # Adjust time for smoothed data
+            adj_times = time_minutes[len(time_minutes)-len(smooth_means):]
+            
+            # Clear and plot
+            self.analysis_graph.ax.clear()
+            
+            db_name = os.path.basename(db_path).replace('.db', '')
+            
+            # Plot all three temperature lines
+            self.analysis_graph.ax.plot(adj_times, smooth_maxs, 
+                                      label="Maximum Temperature", 
+                                      color='#ff6b6b', linewidth=2.5)
+            self.analysis_graph.ax.plot(adj_times, smooth_means, 
+                                      label="Average Temperature", 
+                                      color='#ffd93d', linewidth=2.5)
+            self.analysis_graph.ax.plot(adj_times, smooth_mins, 
+                                      label="Minimum Temperature", 
+                                      color='#4ecdc4', linewidth=2.5)
+            
+            # Add trend lines if data is sufficient
+            if len(adj_times) > 10:
+                # Calculate trend for max temperatures
+                z_max = np.polyfit(adj_times, smooth_maxs, 1)
+                p_max = np.poly1d(z_max)
+                self.analysis_graph.ax.plot(adj_times, p_max(adj_times), 
+                                          "r--", alpha=0.5, linewidth=1, 
+                                          label=f"Max Trend ({z_max[0]:.2f}°F/min)")
+                
+                # Calculate trend for min temperatures  
+                z_min = np.polyfit(adj_times, smooth_mins, 1)
+                p_min = np.poly1d(z_min)
+                self.analysis_graph.ax.plot(adj_times, p_min(adj_times), 
+                                          "c--", alpha=0.5, linewidth=1,
+                                          label=f"Min Trend ({z_min[0]:.2f}°F/min)")
+            
+            # Styling
+            self.analysis_graph.ax.set_xlabel("Time (minutes)", color='white')
+            self.analysis_graph.ax.set_ylabel("Temperature (°F)", color='white')
+            self.analysis_graph.ax.set_title(f"Single Run Analysis: {db_name}", 
+                                           color='white', fontsize=14, fontweight='bold')
+            self.analysis_graph.ax.grid(True, alpha=0.3, color='white')
+            self.analysis_graph.ax.legend(loc="upper left", facecolor='#2b2b2b', edgecolor='white')
+            
+            # Style the graph
+            self.analysis_graph.ax.tick_params(colors='white')
+            for spine in self.analysis_graph.ax.spines.values():
+                spine.set_color('white')
+            
+            self.analysis_graph.draw()
+            
+            # Generate detailed single-run statistics
+            self.generate_single_run_stats(db_name, timestamps, means, maxs, mins, 
+                                         smooth_means, smooth_maxs, smooth_mins, adj_times)
+            
+            self.info_label.setText(f"Analyzing single run: {db_name}")
+            
+        except Exception as e:
+            print(f"Error analyzing single run {db_path}: {e}")
+            self.info_label.setText(f"Error analyzing run: {str(e)}")
+    
+    def generate_single_run_stats(self, db_name, timestamps, means, maxs, mins, 
+                                smooth_means, smooth_maxs, smooth_mins, adj_times):
+        """Generate detailed statistics for a single run"""
+        
+        duration = (timestamps[-1] - timestamps[0]).total_seconds() / 60  # minutes
+        
+        # Temperature statistics
+        overall_max = max(maxs)
+        overall_min = min(mins)
+        avg_max = np.mean(maxs)
+        avg_min = np.mean(mins)
+        avg_mean = np.mean(means)
+        
+        # Temperature ranges and variability
+        temp_range = overall_max - overall_min
+        max_std = np.std(maxs)
+        min_std = np.std(mins)
+        mean_std = np.std(means)
+        
+        # Rate of change analysis (using smoothed data)
+        if len(adj_times) > 1:
+            max_rate_changes = []
+            min_rate_changes = []
+            for i in range(1, len(smooth_maxs)):
+                time_diff = adj_times[i] - adj_times[i-1]
+                if time_diff > 0:
+                    max_rate_changes.append((smooth_maxs[i] - smooth_maxs[i-1]) / time_diff)
+                    min_rate_changes.append((smooth_mins[i] - smooth_mins[i-1]) / time_diff)
+            
+            max_heating_rate = max(max_rate_changes) if max_rate_changes else 0
+            max_cooling_rate = min(max_rate_changes) if max_rate_changes else 0
+            avg_max_rate = np.mean(max_rate_changes) if max_rate_changes else 0
+            avg_min_rate = np.mean(min_rate_changes) if min_rate_changes else 0
+        else:
+            max_heating_rate = max_cooling_rate = avg_max_rate = avg_min_rate = 0
+        
+        # Time-based analysis
+        peak_max_time = adj_times[smooth_maxs.index(max(smooth_maxs))] if smooth_maxs else 0
+        peak_min_time = adj_times[smooth_mins.index(max(smooth_mins))] if smooth_mins else 0
+        
+        # Stability analysis (coefficient of variation)
+        max_cv = (max_std / avg_max * 100) if avg_max > 0 else 0
+        min_cv = (min_std / avg_min * 100) if avg_min > 0 else 0
+        
+        stats_text = f"SINGLE RUN ANALYSIS: {db_name}\n\n"
+        
+        stats_text += "=== BASIC STATISTICS ===\n"
+        stats_text += f"Duration: {duration:.1f} minutes\n"
+        stats_text += f"Total Readings: {len(timestamps)}\n"
+        stats_text += f"Recording Interval: ~{duration*60/len(timestamps):.1f} seconds\n\n"
+        
+        stats_text += "=== TEMPERATURE SUMMARY ===\n"
+        stats_text += f"Peak Maximum: {overall_max:.1f}°F\n"
+        stats_text += f"Lowest Minimum: {overall_min:.1f}°F\n"
+        stats_text += f"Overall Range: {temp_range:.1f}°F\n"
+        stats_text += f"Average Maximum: {avg_max:.1f}°F\n"
+        stats_text += f"Average Minimum: {avg_min:.1f}°F\n"
+        stats_text += f"Average Mean: {avg_mean:.1f}°F\n\n"
+        
+        stats_text += "=== VARIABILITY ===\n"
+        stats_text += f"Max Temp Std Dev: {max_std:.2f}°F\n"
+        stats_text += f"Min Temp Std Dev: {min_std:.2f}°F\n"
+        stats_text += f"Mean Temp Std Dev: {mean_std:.2f}°F\n"
+        stats_text += f"Max Stability (CV): {max_cv:.1f}%\n"
+        stats_text += f"Min Stability (CV): {min_cv:.1f}%\n\n"
+        
+        stats_text += "=== RATE OF CHANGE ===\n"
+        stats_text += f"Max Heating Rate: {max_heating_rate:.2f}°F/min\n"
+        stats_text += f"Max Cooling Rate: {max_cooling_rate:.2f}°F/min\n"
+        stats_text += f"Avg Max Change Rate: {avg_max_rate:.2f}°F/min\n"
+        stats_text += f"Avg Min Change Rate: {avg_min_rate:.2f}°F/min\n\n"
+        
+        stats_text += "=== TIMING ===\n"
+        stats_text += f"Start Time: {timestamps[0].strftime('%Y-%m-%d %H:%M:%S')}\n"
+        stats_text += f"End Time: {timestamps[-1].strftime('%Y-%m-%d %H:%M:%S')}\n"
+        stats_text += f"Peak Max at: {peak_max_time:.1f} minutes\n"
+        stats_text += f"Peak Min at: {peak_min_time:.1f} minutes\n\n"
+        
+        # Performance indicators
+        if max_heating_rate > 5:
+            stats_text += "⚠️ Rapid heating detected\n"
+        if max_cooling_rate < -5:
+            stats_text += "⚠️ Rapid cooling detected\n"
+        if max_cv > 10:
+            stats_text += "⚠️ High temperature variability\n"
+        if temp_range > 100:
+            stats_text += "📊 Wide temperature range\n"
+        
+        self.stats_text.setText(stats_text)
+    
+    def plot_comparison(self, db_paths):
+        """Plot comparison of multiple database files"""
+        self.analysis_graph.ax.clear()
+        
+        colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7', '#dda0dd', '#98d8c8', '#f7dc6f']
+        
+        all_data = []
+        
+        for i, db_path in enumerate(db_paths):
+            try:
+                conn = sqlite3.connect(db_path)
+                rows = conn.execute("SELECT * FROM readings ORDER BY ROWID ASC").fetchall()
+                conn.close()
+                
+                if not rows:
+                    continue
+                
+                timestamps = [datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S") for r in rows]
+                maxs = [r[2] for r in rows]
+                mins = [r[3] for r in rows]
+                
+                # Normalize timestamps to start from 0
+                if timestamps:
+                    start_time = timestamps[0]
+                    normalized_times = [(t - start_time).total_seconds() / 60 for t in timestamps]  # Convert to minutes
+                    
+                    smooth_max = smooth(maxs)
+                    smooth_min = smooth(mins)
+                    
+                    # Adjust timestamps for smoothed data
+                    adj_times = normalized_times[len(normalized_times)-len(smooth_max):]
+                    
+                    db_name = os.path.basename(db_path).replace('.db', '')
+                    color = colors[i % len(colors)]
+                    
+                    self.analysis_graph.ax.plot(adj_times, smooth_max, 
+                                              label=f"{db_name} (Max)", 
+                                              color=color, linewidth=2)
+                    self.analysis_graph.ax.plot(adj_times, smooth_min, 
+                                              label=f"{db_name} (Min)", 
+                                              color=color, linewidth=2, 
+                                              linestyle='--', alpha=0.7)
+                    
+                    # Store data for statistics
+                    all_data.append({
+                        'name': db_name,
+                        'max_temps': smooth_max,
+                        'min_temps': smooth_min,
+                        'times': adj_times,
+                        'duration': max(adj_times) if adj_times else 0
+                    })
+                    
+            except Exception as e:
+                print(f"Error processing {db_path}: {e}")
+        
+        if all_data:
+            self.analysis_graph.ax.set_xlabel("Time (minutes)", color='white')
+            self.analysis_graph.ax.set_ylabel("Temperature (°F)", color='white')
+            self.analysis_graph.ax.set_title("Multi-Run Temperature Comparison", color='white', fontsize=14, fontweight='bold')
+            self.analysis_graph.ax.grid(True, alpha=0.3, color='white')
+            self.analysis_graph.ax.legend(loc="upper left", facecolor='#2b2b2b', edgecolor='white')
+            
+            # Style the graph
+            self.analysis_graph.ax.tick_params(colors='white')
+            for spine in self.analysis_graph.ax.spines.values():
+                spine.set_color('white')
+            
+            self.analysis_graph.draw()
+            
+            # Update statistics for multi-run comparison
+            self.update_comparison_statistics(all_data)
+            self.info_label.setText(f"Comparing {len(all_data)} runs")
+    
+    def update_comparison_statistics(self, data):
+        """Update statistics display for multi-run comparison"""
+        if not data:
+            return
+        
+        stats_text = "MULTI-RUN COMPARISON STATISTICS:\n\n"
+        
+        for run in data:
+            stats_text += f"Run: {run['name']}\n"
+            stats_text += f"  Duration: {run['duration']:.1f} minutes\n"
+            stats_text += f"  Max Temp: {max(run['max_temps']):.1f}°F\n"
+            stats_text += f"  Min Temp: {min(run['min_temps']):.1f}°F\n"
+            stats_text += f"  Avg Max: {np.mean(run['max_temps']):.1f}°F\n"
+            stats_text += f"  Avg Min: {np.mean(run['min_temps']):.1f}°F\n\n"
+        
+        # Overall statistics
+        all_maxs = [temp for run in data for temp in run['max_temps']]
+        all_mins = [temp for run in data for temp in run['min_temps']]
+        
+        stats_text += "OVERALL COMPARISON:\n"
+        stats_text += f"  Highest Temperature: {max(all_maxs):.1f}°F\n"
+        stats_text += f"  Lowest Temperature: {min(all_mins):.1f}°F\n"
+        stats_text += f"  Average Maximum: {np.mean(all_maxs):.1f}°F\n"
+        stats_text += f"  Average Minimum: {np.mean(all_mins):.1f}°F\n"
+        stats_text += f"  Temperature Range: {max(all_maxs) - min(all_mins):.1f}°F\n\n"
+        
+        # Run-to-run comparison insights
+        max_temps_by_run = [max(run['max_temps']) for run in data]
+        min_temps_by_run = [min(run['min_temps']) for run in data]
+        durations = [run['duration'] for run in data]
+        
+        stats_text += "COMPARISON INSIGHTS:\n"
+        stats_text += f"  Most consistent max temps: {min(max_temps_by_run):.1f}°F - {max(max_temps_by_run):.1f}°F\n"
+        stats_text += f"  Duration range: {min(durations):.1f} - {max(durations):.1f} minutes\n"
+        stats_text += f"  Longest run: {data[durations.index(max(durations))]['name']}\n"
+        stats_text += f"  Shortest run: {data[durations.index(min(durations))]['name']}\n"
+        
+        if max_temps_by_run:
+            hottest_run_idx = max_temps_by_run.index(max(max_temps_by_run))
+            coolest_run_idx = min_temps_by_run.index(min(min_temps_by_run))
+            stats_text += f"  Hottest run: {data[hottest_run_idx]['name']} ({max(max_temps_by_run):.1f}°F)\n"
+            stats_text += f"  Coolest run: {data[coolest_run_idx]['name']} ({min(min_temps_by_run):.1f}°F)\n"
+        
+        self.stats_text.setText(stats_text)
+    
+    def generate_statistics(self):
+        """Generate detailed statistics report"""
+        selected_dbs = self.get_selected_databases()
+        
+        if not selected_dbs:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Warning")
+            msg.setText("Please select at least 1 database file to analyze")
+            msg.setStyleSheet(self.parent().parent().styleSheet())
+            msg.exec()
+            return
+        
+        try:
+            import pandas as pd
+            
+            # Create comprehensive statistics report
+            report_data = []
+            
+            for db_path in selected_dbs:
+                conn = sqlite3.connect(db_path)
+                df = pd.read_sql_query("SELECT * FROM readings", conn)
+                conn.close()
+                
+                if df.empty:
+                    continue
+                
+                db_name = os.path.basename(db_path).replace('.db', '')
+                
+                # Calculate statistics
+                stats = {
+                    'Run_Name': db_name,
+                    'Total_Readings': len(df),
+                    'Duration_Minutes': len(df) * 10 / 60,  # Assuming 10-second intervals
+                    'Max_Temperature': df['temp_f_max'].max(),
+                    'Min_Temperature': df['temp_f_min'].min(),
+                    'Avg_Max_Temperature': df['temp_f_max'].mean(),
+                    'Avg_Min_Temperature': df['temp_f_min'].mean(),
+                    'Avg_Mean_Temperature': df['temp_f_mean'].mean(),
+                    'Temperature_Range': df['temp_f_max'].max() - df['temp_f_min'].min(),
+                    'Max_Temp_StdDev': df['temp_f_max'].std(),
+                    'Min_Temp_StdDev': df['temp_f_min'].std(),
+                    'Start_Time': df['timestamp'].iloc[0],
+                    'End_Time': df['timestamp'].iloc[-1]
+                }
+                
+                report_data.append(stats)
+            
+            if report_data:
+                # Create DataFrame and save to CSV
+                report_df = pd.DataFrame(report_data)
+                
+                # Save report
+                csv_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle CSV(s)"
+                os.makedirs(csv_dir, exist_ok=True)
+                
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                report_path = os.path.join(csv_dir, f"Analysis_Report_{timestamp}.csv")
+                
+                report_df.to_csv(report_path, index=False)
+                
+                # Show success message
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setWindowTitle("Success")
+                msg.setText(f"Statistics report generated successfully!\n\nSaved to: {report_path}")
+                msg.setStyleSheet(self.parent().parent().styleSheet())
+                msg.exec()
+                
+                self.info_label.setText(f"Report saved: {os.path.basename(report_path)}")
+            
+        except Exception as e:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Critical)
+            msg.setWindowTitle("Error")
+            msg.setText(f"Failed to generate report: {str(e)}")
+            msg.setStyleSheet(self.parent().parent().styleSheet())
+            msg.exec()
+    
+    def export_combined_csv(self):
+        """Export all selected databases to a single combined CSV file"""
+        selected_dbs = self.get_selected_databases()
+        
+        if not selected_dbs:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Warning")
+            msg.setText("Please select at least 1 database file to export")
+            msg.setStyleSheet(self.parent().parent().styleSheet())
+            msg.exec()
+            return
+        
+        try:
+            import pandas as pd
+            
+            combined_data = []
+            
+            for db_path in selected_dbs:
+                conn = sqlite3.connect(db_path)
+                df = pd.read_sql_query("SELECT * FROM readings", conn)
+                conn.close()
+                
+                if df.empty:
+                    continue
+                
+                # Add run identifier and profile information
+                db_name = os.path.basename(db_path).replace('.db', '')
+                df['run_name'] = db_name
+                df['database_file'] = os.path.basename(db_path)
+                
+                # Determine profile name from path
+                base_db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+                rel_path = os.path.relpath(os.path.dirname(db_path), base_db_dir)
+                if rel_path == '.':
+                    profile_name = "No_Profile"
+                else:
+                    profile_name = rel_path
+                df['test_profile'] = profile_name
+                
+                combined_data.append(df)
+            
+            if combined_data:
+                # Combine all data
+                combined_df = pd.concat(combined_data, ignore_index=True)
+                
+                # Save combined CSV to a special subdirectory for combined analysis
+                base_csv_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle CSV(s)"
+                csv_dir = os.path.join(base_csv_dir, "Combined_Analysis")
+                os.makedirs(csv_dir, exist_ok=True)
+                
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                combined_path = os.path.join(csv_dir, f"Combined_Analysis_{timestamp}.csv")
+                
+                combined_df.to_csv(combined_path, index=False)
+                
+                # Show success message
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setWindowTitle("Success")
+                msg.setText(f"Combined CSV exported successfully!\n\nSaved to: {combined_path}\n\nTotal records: {len(combined_df)}")
+                msg.setStyleSheet(self.parent().parent().styleSheet())
+                msg.exec()
+                
+                self.info_label.setText(f"Combined export saved: {os.path.basename(combined_path)}")
+            
+        except Exception as e:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Critical)
+            msg.setWindowTitle("Error")
+            msg.setText(f"Failed to export combined CSV: {str(e)}")
+            msg.setStyleSheet(self.parent().parent().styleSheet())
+            msg.exec()
+
 class ModernThermalApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -365,6 +2154,95 @@ class ModernThermalApp(QMainWindow):
                 padding: 8px;
                 border-radius: 4px;
                 font-size: 11px;
+                selection-background-color: #0d7377;
+                selection-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #0d7377;
+            }
+            QLineEdit:hover {
+                border-color: #14a085;
+            }
+            QComboBox {
+                background-color: #2b2b2b;
+                color: white;
+                border: 2px solid #444;
+                padding: 8px;
+                border-radius: 4px;
+                font-size: 11px;
+                selection-background-color: #0d7377;
+                selection-color: white;
+            }
+            QComboBox:hover {
+                border-color: #0d7377;
+            }
+            QComboBox:focus {
+                border-color: #0d7377;
+            }
+            QComboBox::drop-down {
+                background-color: #444;
+                border: none;
+                border-radius: 3px;
+            }
+            QComboBox::down-arrow {
+                color: white;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2b2b2b;
+                color: white;
+                border: 2px solid #444;
+                selection-background-color: #0d7377;
+                selection-color: white;
+            }
+            QComboBox QAbstractItemView::item {
+                color: white;
+                background-color: transparent;
+                padding: 4px;
+            }
+            QComboBox QAbstractItemView::item:selected {
+                background-color: #0d7377;
+                color: white;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #14a085;
+                color: white;
+            }
+            QCheckBox {
+                color: white;
+                font-size: 11px;
+            }
+            QCheckBox::indicator {
+                background-color: #2b2b2b;
+                border: 2px solid #444;
+                border-radius: 3px;
+                width: 16px;
+                height: 16px;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #0d7377;
+                border-color: #0d7377;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #14a085;
+            }
+            QCheckBox:focus {
+                outline: none;
+            }
+            QTextEdit {
+                background-color: #2b2b2b;
+                color: white;
+                border: 2px solid #444;
+                padding: 8px;
+                border-radius: 4px;
+                font-size: 11px;
+                selection-background-color: #0d7377;
+                selection-color: white;
+            }
+            QTextEdit:focus {
+                border-color: #0d7377;
+            }
+            QTextEdit:hover {
+                border-color: #14a085;
             }
             QGroupBox {
                 color: white;
@@ -380,6 +2258,26 @@ class ModernThermalApp(QMainWindow):
                 left: 10px;
                 padding: 0 10px 0 10px;
             }
+            QTabWidget::pane {
+                border: 2px solid #444;
+                background-color: #1e1e1e;
+            }
+            QTabBar::tab {
+                background-color: #2b2b2b;
+                color: white;
+                padding: 10px 20px;
+                margin-right: 2px;
+                border-top: 2px solid #444;
+                border-left: 2px solid #444;
+                border-right: 2px solid #444;
+            }
+            QTabBar::tab:selected {
+                background-color: #0d7377;
+                border-top: 2px solid #0d7377;
+            }
+            QTabBar::tab:hover {
+                background-color: #14a085;
+            }
         """)
         
         # Initialize variables
@@ -392,9 +2290,18 @@ class ModernThermalApp(QMainWindow):
         self.last_log_time = 0
         self.recording_started = False
         self.current_temp_data = None
+        self.current_test_profile = None
+        self.profile_variable_values = {}
+        self.recording_profile_variables = {}  # Store profile variables for current recording session
         
         self.setup_ui()
         self.setup_camera()
+        
+        # Initialize test profiles
+        self.refresh_test_profiles()
+        
+        # Initialize last log display
+        self.update_last_log_display()
         
         # Timer for graph updates
         self.graph_timer = QTimer()
@@ -404,6 +2311,63 @@ class ModernThermalApp(QMainWindow):
         # Add keyboard shortcut for quick exit
         exit_shortcut = QShortcut(QKeySequence("Ctrl+Q"), self)
         exit_shortcut.activated.connect(self.close)
+
+    def get_safe_profile_name(self, profile_name):
+        """Convert profile name to safe folder name"""
+        if not profile_name:
+            return "No_Profile"
+        
+        # Create safe folder name
+        safe_name = "".join(c for c in profile_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        safe_name = safe_name.replace(' ', '_')
+        return safe_name if safe_name else "Unknown_Profile"
+
+    def get_last_log_name(self, profile_name=None):
+        """Get the most recent log name used for the current or specified profile"""
+        try:
+            base_db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+            
+            if profile_name:
+                safe_profile_name = self.get_safe_profile_name(profile_name)
+                db_dir = os.path.join(base_db_dir, safe_profile_name)
+            elif self.current_test_profile:
+                profile_name = self.current_test_profile.get('name', 'Unknown_Profile')
+                safe_profile_name = self.get_safe_profile_name(profile_name)
+                db_dir = os.path.join(base_db_dir, safe_profile_name)
+            else:
+                db_dir = os.path.join(base_db_dir, "No_Profile")
+            
+            if not os.path.exists(db_dir):
+                return None
+            
+            # Get all .db files in the profile directory
+            db_files = [f for f in os.listdir(db_dir) if f.endswith('.db')]
+            if not db_files:
+                return None
+            
+            # Sort by modification time (most recent first)
+            db_files.sort(key=lambda f: os.path.getmtime(os.path.join(db_dir, f)), reverse=True)
+            
+            # Get the most recent file name without extension
+            most_recent = db_files[0].replace('.db', '')
+            
+            # If it starts with the default timestamp format, return "Auto-generated"
+            if most_recent.startswith('ir_log_tempf_'):
+                return "Auto-generated timestamp"
+            else:
+                return most_recent
+                
+        except Exception as e:
+            print(f"Error getting last log name: {e}")
+            return None
+
+    def update_last_log_display(self):
+        """Update the last log name display"""
+        last_log = self.get_last_log_name()
+        if last_log:
+            self.last_log_label.setText(f"Last log: {last_log}")
+        else:
+            self.last_log_label.setText("Last log: None")
 
     def create_styled_message_box(self, icon, title, text, informative_text="", buttons=None, default_button=None):
         """Create a consistently styled message box for the dark theme"""
@@ -450,12 +2414,65 @@ class ModernThermalApp(QMainWindow):
             
         return msg_box
 
+    def show_critical(self, title, text, informative_text=""):
+        """Show a styled critical message box"""
+        msg_box = self.create_styled_message_box(
+            QMessageBox.Icon.Critical, title, text, informative_text,
+            QMessageBox.StandardButton.Ok
+        )
+        return msg_box.exec()
+
+    def show_warning(self, title, text, informative_text=""):
+        """Show a styled warning message box"""
+        msg_box = self.create_styled_message_box(
+            QMessageBox.Icon.Warning, title, text, informative_text,
+            QMessageBox.StandardButton.Ok
+        )
+        return msg_box.exec()
+
+    def show_information(self, title, text, informative_text=""):
+        """Show a styled information message box"""
+        msg_box = self.create_styled_message_box(
+            QMessageBox.Icon.Information, title, text, informative_text,
+            QMessageBox.StandardButton.Ok
+        )
+        return msg_box.exec()
+
+    def show_question(self, title, text, informative_text="", buttons=None):
+        """Show a styled question message box"""
+        if buttons is None:
+            buttons = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        msg_box = self.create_styled_message_box(
+            QMessageBox.Icon.Question, title, text, informative_text,
+            buttons, QMessageBox.StandardButton.No
+        )
+        return msg_box.exec()
+
     def setup_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # Main layout
-        main_layout = QHBoxLayout(central_widget)
+        # Create tab widget
+        self.tab_widget = QTabWidget()
+        central_widget_layout = QVBoxLayout(central_widget)
+        central_widget_layout.addWidget(self.tab_widget)
+        
+        # Create Live Recording tab
+        self.setup_live_recording_tab()
+        
+        # Create Test Profile tab
+        self.setup_test_profile_tab()
+        
+        # Create Data Analysis tab
+        self.setup_data_analysis_tab()
+    
+    def setup_live_recording_tab(self):
+        """Setup the live recording tab"""
+        live_tab = QWidget()
+        self.tab_widget.addTab(live_tab, "Live Recording")
+        
+        # Main layout for live tab
+        main_layout = QHBoxLayout(live_tab)
         
         # Left panel for camera and controls
         left_panel = QVBoxLayout()
@@ -520,16 +2537,39 @@ class ModernThermalApp(QMainWindow):
         
         left_panel.addWidget(control_group)
         
-        # Log naming section
+        # Log naming section and test profile selection
         log_group = QGroupBox("Recording Settings")
         log_layout = QVBoxLayout(log_group)
         
+        # Test profile selection
+        profile_layout = QHBoxLayout()
+        profile_layout.addWidget(QLabel("Test Profile:"))
+        self.profile_combo = QComboBox()
+        self.profile_combo.addItem("No Profile Selected", None)
+        self.profile_combo.currentTextChanged.connect(self.on_test_profile_changed)
+        profile_layout.addWidget(self.profile_combo)
+        
+        refresh_profiles_btn = QPushButton("↻")
+        refresh_profiles_btn.setMaximumWidth(30)
+        refresh_profiles_btn.setToolTip("Refresh test profiles")
+        refresh_profiles_btn.clicked.connect(self.refresh_test_profiles)
+        profile_layout.addWidget(refresh_profiles_btn)
+        
+        log_layout.addLayout(profile_layout)
+        
+        # Log name input
         log_name_layout = QHBoxLayout()
         log_name_layout.addWidget(QLabel("Log Name:"))
         self.log_name_input = QLineEdit()
         self.log_name_input.setPlaceholderText("Enter custom log name (optional)")
         log_name_layout.addWidget(self.log_name_input)
         log_layout.addLayout(log_name_layout)
+        
+        # Last log name display
+        self.last_log_label = QLabel("Last log: None")
+        self.last_log_label.setStyleSheet("color: #bbb; font-size: 10px; font-style: italic; margin-left: 5px;")
+        self.last_log_label.setWordWrap(True)
+        log_layout.addWidget(self.last_log_label)
         
         left_panel.addWidget(log_group)
         
@@ -547,16 +2587,24 @@ class ModernThermalApp(QMainWindow):
         graph_layout.addWidget(self.graph_widget)
         right_panel.addWidget(graph_group)
         
+        # Profile variables container (moved from left panel)
+        self.profile_variables_group = QGroupBox("Test Variables")
+        self.profile_variables_layout = QVBoxLayout(self.profile_variables_group)
+        self.profile_variables_group.setVisible(False)
+        self.profile_variable_inputs = {}
+        right_panel.addWidget(self.profile_variables_group)
+        
         # Instructions
         instructions_group = QGroupBox("Instructions")
         instructions_layout = QVBoxLayout(instructions_group)
         instructions_text = QLabel(
-            "1. Click on the camera image to add ROI vertices\n"
+            "1. Click on camera image to add ROI vertices\n"
             "2. Click 'Finish ROI' when you have at least 3 points\n"
-            "3. Enter a custom log name (optional)\n"
-            "4. Click 'Start Recording' to begin data logging\n"
-            "5. Use 'Pause' to temporarily stop logging\n"
-            "6. Click 'Export CSV' to save recorded data"
+            "3. Select test profile and fill variables (if using)\n"
+            "4. Enter custom log name (optional)\n"
+            "5. Click 'Start Recording' to begin data logging\n"
+            "6. Use 'Pause' to temporarily stop logging\n"
+            "7. Click 'Export CSV' to save recorded data"
         )
         instructions_text.setWordWrap(True)
         instructions_text.setStyleSheet("color: #bbb; font-size: 10px;")
@@ -566,6 +2614,162 @@ class ModernThermalApp(QMainWindow):
         # Add panels to main layout
         main_layout.addLayout(left_panel, 2)  # 2/3 width for left panel
         main_layout.addLayout(right_panel, 1)  # 1/3 width for right panel
+    
+    def setup_test_profile_tab(self):
+        """Setup the test profile management tab"""
+        self.test_profile_tab = TestProfileTab()
+        self.tab_widget.addTab(self.test_profile_tab, "Test Profiles")
+    
+    def setup_data_analysis_tab(self):
+        """Setup the data analysis tab"""
+        self.analysis_tab = DataAnalysisTab()
+        self.tab_widget.addTab(self.analysis_tab, "Data Analysis")
+
+    def refresh_test_profiles(self):
+        """Refresh the test profile dropdown"""
+        self.profile_combo.clear()
+        self.profile_combo.addItem("No Profile Selected", None)
+        
+        profiles_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Test Profiles"
+        if not os.path.exists(profiles_dir):
+            return
+        
+        try:
+            profile_files = [f for f in os.listdir(profiles_dir) if f.endswith('.json')]
+            for profile_file in sorted(profile_files):
+                profile_path = os.path.join(profiles_dir, profile_file)
+                try:
+                    with open(profile_path, 'r') as f:
+                        profile_data = json.load(f)
+                    
+                    profile_name = profile_data.get('name', 'Unknown')
+                    self.profile_combo.addItem(profile_name, profile_path)
+                    
+                except Exception as e:
+                    print(f"Error reading profile {profile_file}: {e}")
+                    
+        except Exception as e:
+            print(f"Error loading test profiles: {e}")
+    
+    def on_test_profile_changed(self):
+        """Handle test profile selection change"""
+        current_data = self.profile_combo.currentData()
+        
+        if current_data is None:
+            # No profile selected
+            self.current_test_profile = None
+            self.profile_variables_group.setVisible(False)
+            self.profile_variable_inputs.clear()
+            self.update_last_log_display()
+            return
+        
+        # Load selected profile
+        try:
+            with open(current_data, 'r') as f:
+                profile_data = json.load(f)
+            
+            self.current_test_profile = profile_data
+            self.setup_profile_variables()
+            self.update_last_log_display()
+            
+        except Exception as e:
+            print(f"Error loading test profile: {e}")
+            self.current_test_profile = None
+            self.profile_variables_group.setVisible(False)
+            self.update_last_log_display()
+    
+    def setup_profile_variables(self):
+        """Setup input fields for profile variables"""
+        # Clear existing inputs
+        for i in reversed(range(self.profile_variables_layout.count())):
+            child = self.profile_variables_layout.itemAt(i).widget()
+            if child:
+                child.setParent(None)
+        
+        self.profile_variable_inputs.clear()
+        
+        if not self.current_test_profile or not self.current_test_profile.get('variables'):
+            self.profile_variables_group.setVisible(False)
+            return
+        
+        # Create input fields for each variable
+        variables = self.current_test_profile.get('variables', [])
+        
+        for var in variables:
+            var_name = var['name']
+            var_type = var['type']
+            default_value = var.get('default_value', '')
+            description = var.get('description', '')
+            is_end_of_cycle = var.get('end_of_cycle', False)
+            
+            # Skip end-of-cycle variables - they'll be prompted for at the end
+            if is_end_of_cycle:
+                continue
+            
+            # Create input widget based on type
+            if var_type == "Boolean":
+                input_widget = QCheckBox()
+                if default_value.lower() in ['true', '1', 'yes']:
+                    input_widget.setChecked(True)
+            elif var_type == "Date":
+                input_widget = QLineEdit()
+                input_widget.setPlaceholderText("YYYY-MM-DD or leave blank for today")
+                if default_value:
+                    input_widget.setText(default_value)
+            elif var_type == "Number":
+                input_widget = QLineEdit()
+                input_widget.setPlaceholderText("Enter numeric value")
+                if default_value:
+                    input_widget.setText(str(default_value))
+            else:  # String
+                input_widget = QLineEdit()
+                input_widget.setPlaceholderText("Enter text value")
+                if default_value:
+                    input_widget.setText(str(default_value))
+            
+            # Add label and input to layout
+            label_text = f"{var_name} ({var_type}):"
+            if description:
+                label_text += f"\n{description}"
+            
+            label = QLabel(label_text)
+            label.setWordWrap(True)
+            self.profile_variables_layout.addWidget(label)
+            self.profile_variables_layout.addWidget(input_widget)
+            
+            self.profile_variable_inputs[var_name] = {
+                'widget': input_widget,
+                'type': var_type
+            }
+        
+        self.profile_variables_group.setVisible(True)
+    
+    def get_profile_variable_values(self):
+        """Get current values from profile variable inputs"""
+        values = {}
+        
+        for var_name, input_info in self.profile_variable_inputs.items():
+            widget = input_info['widget']
+            var_type = input_info['type']
+            
+            if var_type == "Boolean":
+                values[var_name] = widget.isChecked()
+            elif var_type == "Date":
+                date_text = widget.text().strip()
+                if not date_text:
+                    values[var_name] = datetime.now().strftime("%Y-%m-%d")
+                else:
+                    values[var_name] = date_text
+            elif var_type == "Number":
+                try:
+                    num_text = widget.text().strip()
+                    values[var_name] = float(num_text) if num_text else 0.0
+                except ValueError:
+                    values[var_name] = 0.0
+            else:  # String
+                values[var_name] = widget.text().strip()
+        
+        return values
 
     def setup_camera(self):
         """Initialize camera in a separate thread"""
@@ -632,8 +2836,12 @@ class ModernThermalApp(QMainWindow):
         try:
             conn = sqlite3.connect(self.current_db)
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn.execute("INSERT INTO readings VALUES (?, ?, ?, ?)", 
-                        (ts, self.current_temp_data[0], self.current_temp_data[1], self.current_temp_data[2]))
+            
+            # Only store temperature data in readings table
+            sql = "INSERT INTO readings (timestamp, temp_f_mean, temp_f_max, temp_f_min) VALUES (?, ?, ?, ?)"
+            values = [ts, self.current_temp_data[0], self.current_temp_data[1], self.current_temp_data[2]]
+            
+            conn.execute(sql, values)
             conn.commit()
             conn.close()
             self.last_log_time = time.time()
@@ -693,8 +2901,19 @@ class ModernThermalApp(QMainWindow):
         """Start/stop recording"""
         if not self.recording:
             # Start recording
-            # Ensure database directory exists
-            db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+            # Determine base directory and profile-specific subdirectory
+            base_db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+            
+            if self.current_test_profile:
+                # Use test profile name for subdirectory
+                profile_name = self.current_test_profile.get('name', 'Unknown_Profile')
+                safe_profile_name = self.get_safe_profile_name(profile_name)
+                db_dir = os.path.join(base_db_dir, safe_profile_name)
+            else:
+                # Use "No_Profile" subdirectory for runs without profiles
+                db_dir = os.path.join(base_db_dir, "No_Profile")
+            
+            # Ensure directory exists
             os.makedirs(db_dir, exist_ok=True)
             
             log_name = self.log_name_input.text().strip()
@@ -783,22 +3002,121 @@ class ModernThermalApp(QMainWindow):
                 # Database doesn't exist, proceed normally
                 self.current_db = proposed_db
             
+            # Validate profile variables if using a test profile
+            if self.current_test_profile:
+                # Check that all required profile variables are filled
+                if hasattr(self, 'profile_variable_inputs'):
+                    # Use the existing function to get all profile variable values
+                    profile_vars = self.get_profile_variable_values()
+                    
+                    # Check for missing required variables (excluding end-of-cycle variables)
+                    missing_vars = []
+                    for var in self.current_test_profile.get('variables', []):
+                        var_name = var['name']
+                        is_end_of_cycle = var.get('end_of_cycle', False)
+                        
+                        # Skip end-of-cycle variables - they'll be prompted for at the end
+                        if is_end_of_cycle:
+                            continue
+                            
+                        if var_name not in profile_vars or (isinstance(profile_vars[var_name], str) and not profile_vars[var_name].strip()):
+                            missing_vars.append(var_name)
+                    
+                    if missing_vars:
+                        msg_box = self.create_styled_message_box(
+                            QMessageBox.Icon.Warning,
+                            "Missing Profile Variables",
+                            f"Please fill in all required profile variables:\n• {chr(10).join(missing_vars)}"
+                        )
+                        msg_box.exec()
+                        return
+                    
+                    # Store profile variables for this recording session
+                    self.recording_profile_variables = profile_vars
+                    print(f"DEBUG: Stored profile variables: {self.recording_profile_variables}")
+                else:
+                    msg_box = self.create_styled_message_box(
+                        QMessageBox.Icon.Warning,
+                        "Profile Variables Not Ready",
+                        "Profile variable inputs are not ready. Please try selecting the profile again."
+                    )
+                    msg_box.exec()
+                    return
+            else:
+                # Clear recording profile variables if no profile selected
+                self.recording_profile_variables = {}
+            
             self.init_database()
             self.recording = True
             self.paused = False
             self.last_log_time = 0
+            
+            # Update the last log display since we just created a new database file
+            self.update_last_log_display()
             
             self.record_btn.setText("Stop Recording")
             self.record_btn.setStyleSheet("background-color: #e74c3c;")
             self.pause_btn.setEnabled(True)
             self.export_btn.setEnabled(True)
             
-            self.status_label.setText(f"Status: Recording to {os.path.basename(self.current_db)}")
+            # Show recording status with profile variables if any
+            if self.recording_profile_variables:
+                var_summary = ", ".join([f"{k}={v}" for k, v in self.recording_profile_variables.items()])
+                self.status_label.setText(f"Status: Recording to {os.path.basename(self.current_db)} ({var_summary})")
+            else:
+                self.status_label.setText(f"Status: Recording to {os.path.basename(self.current_db)}")
             self.status_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
         else:
             # Stop recording
             self.recording = False
             self.paused = False
+            
+            # Check for end-of-cycle variables in the current profile
+            if self.current_test_profile:
+                # Find end-of-cycle variables
+                end_of_cycle_vars = []
+                if 'variables' in self.current_test_profile:
+                    for var in self.current_test_profile['variables']:
+                        if var.get('end_of_cycle', False):
+                            end_of_cycle_vars.append(var)
+                
+                # Show end-of-cycle dialog if there are variables to collect
+                if end_of_cycle_vars:
+                    dialog = EndOfCycleDialog(self, end_of_cycle_vars)
+                    if dialog.exec() == QDialog.DialogCode.Accepted:
+                        # Get the collected values
+                        end_of_cycle_values = dialog.get_variable_values()
+                        
+                        # Save to database - add to session_info
+                        conn = sqlite3.connect(self.current_db)
+                        cursor = conn.cursor()
+                        for var_name, value in end_of_cycle_values.items():
+                            cursor.execute('''
+                                INSERT OR REPLACE INTO session_info (key, value)
+                                VALUES (?, ?)
+                            ''', (f'end_of_cycle_{var_name}', value))
+                        conn.commit()
+                        conn.close()
+                        
+                        QMessageBox.information(self, "Success", 
+                                              f"End-of-cycle variables saved successfully.")
+                    else:
+                        # User cancelled - ask if they want to continue without saving
+                        reply = QMessageBox.question(self, "Confirm", 
+                                                   "Recording stopped without saving end-of-cycle variables. Continue?",
+                                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                        if reply == QMessageBox.StandardButton.No:
+                            # Resume recording
+                            self.recording = True
+                            self.record_btn.setText("Stop Recording")
+                            self.record_btn.setStyleSheet("background-color: #e74c3c;")
+                            self.pause_btn.setEnabled(True)
+                            self.status_label.setText("Status: Recording resumed")
+                            self.status_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
+                            return
+            
+            # Clear stored profile variables for this session
+            self.recording_profile_variables = {}
             
             self.record_btn.setText("Start Recording")
             self.record_btn.setStyleSheet("background-color: #0d7377;")
@@ -824,6 +3142,8 @@ class ModernThermalApp(QMainWindow):
     def init_database(self):
         """Initialize database for logging"""
         conn = sqlite3.connect(self.current_db)
+        
+        # Create base readings table (only temperature data)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS readings (
                 timestamp TEXT,
@@ -832,6 +3152,29 @@ class ModernThermalApp(QMainWindow):
                 temp_f_min REAL
             )
         """)
+        
+        # Create session_info table for profile variables (stored once per recording session)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_info (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        
+        # Store profile information and variables once
+        if self.current_test_profile:
+            # Store the profile definition
+            profile_json = json.dumps(self.current_test_profile)
+            conn.execute("INSERT OR REPLACE INTO session_info VALUES ('test_profile', ?)", (profile_json,))
+            
+            # Store the current variable values for this session
+            for var_name, var_value in self.recording_profile_variables.items():
+                conn.execute("INSERT OR REPLACE INTO session_info VALUES (?, ?)", (f"var_{var_name}", str(var_value)))
+        
+        # Store session start time
+        session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute("INSERT OR REPLACE INTO session_info VALUES ('session_start', ?)", (session_start,))
+        
         conn.commit()
         conn.close()
 
@@ -849,19 +3192,58 @@ class ModernThermalApp(QMainWindow):
         try:
             import pandas as pd
             
-            # Set target directory and ensure it exists
-            csv_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle CSV(s)"
+            # Determine CSV directory based on test profile
+            base_csv_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle CSV(s)"
+            
+            if self.current_test_profile:
+                # Use test profile name for subdirectory
+                profile_name = self.current_test_profile.get('name', 'Unknown_Profile')
+                safe_profile_name = self.get_safe_profile_name(profile_name)
+                csv_dir = os.path.join(base_csv_dir, safe_profile_name)
+            else:
+                # Use "No_Profile" subdirectory for runs without profiles
+                csv_dir = os.path.join(base_csv_dir, "No_Profile")
+            
+            # Ensure directory exists
             os.makedirs(csv_dir, exist_ok=True)
             
             # Generate filename based on database name
             base_name = os.path.basename(self.current_db).replace(".db", ".csv")
             file_path = os.path.join(csv_dir, base_name)
             
-            # Export to CSV
+            # Read temperature data
             conn = sqlite3.connect(self.current_db)
             df = pd.read_sql_query("SELECT * FROM readings", conn)
+            
+            # Get session info (profile variables stored once)
+            session_info = {}
+            
+            # Get start-of-cycle variables (var_ prefix)
+            cursor = conn.execute("SELECT key, value FROM session_info WHERE key LIKE 'var_%'")
+            for key, value in cursor.fetchall():
+                var_name = key[4:]  # Remove 'var_' prefix
+                session_info[var_name] = value
+            
+            # Get end-of-cycle variables (end_of_cycle_ prefix)
+            cursor = conn.execute("SELECT key, value FROM session_info WHERE key LIKE 'end_of_cycle_%'")
+            for key, value in cursor.fetchall():
+                var_name = key[13:]  # Remove 'end_of_cycle_' prefix
+                session_info[f"{var_name} (End-of-Cycle)"] = value
+            
             conn.close()
-            df.to_csv(file_path, index=False)
+            
+            # Create CSV with profile variables as header comments, not repeated columns
+            with open(file_path, 'w', newline='') as csvfile:
+                # Write profile variables as comments at the top
+                if session_info:
+                    csvfile.write("# Profile Variables (constants for this recording session):\n")
+                    for var_name, var_value in session_info.items():
+                        csvfile.write(f"# {var_name}: {var_value}\n")
+                    csvfile.write("#\n")
+                    csvfile.write("# Temperature Readings:\n")
+                
+                # Write the temperature data only
+                df.to_csv(csvfile, index=False)
             
             # Show success message
             msg_box = self.create_styled_message_box(
@@ -882,8 +3264,9 @@ class ModernThermalApp(QMainWindow):
 
     def select_comparison_db(self):
         """Select a database file to compare against"""
-        db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
-        if not os.path.exists(db_dir):
+        base_db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+        
+        if not os.path.exists(base_db_dir):
             msg_box = self.create_styled_message_box(
                 QMessageBox.Icon.Warning,
                 "Warning",
@@ -891,10 +3274,21 @@ class ModernThermalApp(QMainWindow):
             )
             msg_box.exec()
             return
+        
+        # Start from the current profile's directory if available
+        if self.current_test_profile:
+            profile_name = self.current_test_profile.get('name', 'Unknown_Profile')
+            safe_profile_name = self.get_safe_profile_name(profile_name)
+            profile_db_dir = os.path.join(base_db_dir, safe_profile_name)
+            
+            # Use profile directory if it exists, otherwise use base directory
+            start_dir = profile_db_dir if os.path.exists(profile_db_dir) else base_db_dir
+        else:
+            start_dir = base_db_dir
             
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Select Database to Compare", 
-            db_dir,
+            start_dir,
             "Database Files (*.db)"
         )
         
