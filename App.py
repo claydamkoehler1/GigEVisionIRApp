@@ -20,11 +20,11 @@ import matplotlib.dates as mdates
 
 # PLC Communication
 try:
-    from pylogix import PLC
+    from pycomm3 import LogixDriver
     PLC_AVAILABLE = True
 except ImportError:
-    print("Warning: pylogix not installed. PLC functionality will be disabled.")
-    print("Install with: pip install pylogix")
+    print("Warning: pycomm3 not installed. PLC functionality will be disabled.")
+    print("Install with: pip install pycomm3")
     PLC_AVAILABLE = False
 
 # --- FLIR Calibration Constants from SpinView ---
@@ -60,7 +60,7 @@ def smooth(data, window=7):
 
 # --- PLC Communication Class ---
 class PLCHeatingProfile:
-    """Class to handle Allen-Bradley PLC communication for heating profile data"""
+    """Class to handle Allen-Bradley PLC communication for heating profile data using pycomm3"""
     
     def __init__(self, ip_address="192.168.1.100"):
         """
@@ -80,16 +80,17 @@ class PLCHeatingProfile:
             return False
             
         try:
-            self.plc = PLC()
-            self.plc.IPAddress = self.ip_address
+            self.plc = LogixDriver(self.ip_address)
+            self.plc.open()
+            
             # Test connection by reading a simple tag
-            test_read = self.plc.Read("Heat_Seq_Time_SP[1]")
-            if test_read.Status == "Success":
+            test_read = self.plc.read("Heat_Seq_Time_SP[1]")
+            if test_read.error is None:
                 self.connected = True
                 print(f"✅ Connected to PLC at {self.ip_address}")
                 return True
             else:
-                print(f"❌ Failed to connect to PLC: {test_read.Status}")
+                print(f"❌ Failed to connect to PLC: {test_read.error}")
                 return False
                 
         except Exception as e:
@@ -100,7 +101,7 @@ class PLCHeatingProfile:
         """Close PLC connection"""
         if self.plc:
             try:
-                self.plc.Close()
+                self.plc.close()
                 self.connected = False
                 print("PLC connection closed")
             except Exception as e:
@@ -128,38 +129,38 @@ class PLCHeatingProfile:
                 
                 # Read time setpoint (INT)
                 time_tag = f"Heat_Seq_Time_SP[{step}]"
-                time_result = self.plc.Read(time_tag)
-                if time_result.Status == "Success":
-                    step_data['time_sp'] = time_result.Value
+                time_result = self.plc.read(time_tag)
+                if time_result.error is None:
+                    step_data['time_sp'] = time_result.value
                 else:
-                    print(f"Failed to read {time_tag}: {time_result.Status}")
+                    print(f"Failed to read {time_tag}: {time_result.error}")
                     step_data['time_sp'] = None
                 
                 # Read start temperature setpoint (INT)
                 start_temp_tag = f"Heat_Seq_Start_Temp_SP[{step}]"
-                start_temp_result = self.plc.Read(start_temp_tag)
-                if start_temp_result.Status == "Success":
-                    step_data['start_temp_sp'] = start_temp_result.Value
+                start_temp_result = self.plc.read(start_temp_tag)
+                if start_temp_result.error is None:
+                    step_data['start_temp_sp'] = start_temp_result.value
                 else:
-                    print(f"Failed to read {start_temp_tag}: {start_temp_result.Status}")
+                    print(f"Failed to read {start_temp_tag}: {start_temp_result.error}")
                     step_data['start_temp_sp'] = None
                 
                 # Read end temperature setpoint (INT)
                 end_temp_tag = f"Heat_Seq_End_Temp_SP[{step}]"
-                end_temp_result = self.plc.Read(end_temp_tag)
-                if end_temp_result.Status == "Success":
-                    step_data['end_temp_sp'] = end_temp_result.Value
+                end_temp_result = self.plc.read(end_temp_tag)
+                if end_temp_result.error is None:
+                    step_data['end_temp_sp'] = end_temp_result.value
                 else:
-                    print(f"Failed to read {end_temp_tag}: {end_temp_result.Status}")
+                    print(f"Failed to read {end_temp_tag}: {end_temp_result.error}")
                     step_data['end_temp_sp'] = None
                 
                 # Read vacuum setpoint (REAL)
                 vac_tag = f"Heat_Seq_Vac_SP[{step}]"
-                vac_result = self.plc.Read(vac_tag)
-                if vac_result.Status == "Success":
-                    step_data['vac_sp'] = vac_result.Value
+                vac_result = self.plc.read(vac_tag)
+                if vac_result.error is None:
+                    step_data['vac_sp'] = vac_result.value
                 else:
-                    print(f"Failed to read {vac_tag}: {vac_result.Status}")
+                    print(f"Failed to read {vac_tag}: {vac_result.error}")
                     step_data['vac_sp'] = None
                 
                 step_data['step_number'] = step
