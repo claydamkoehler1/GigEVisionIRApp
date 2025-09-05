@@ -18,6 +18,15 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
 
+# PLC Communication
+try:
+    from pylogix import PLC
+    PLC_AVAILABLE = True
+except ImportError:
+    print("Warning: pylogix not installed. PLC functionality will be disabled.")
+    print("Install with: pip install pylogix")
+    PLC_AVAILABLE = False
+
 # --- FLIR Calibration Constants from SpinView ---
 R = 554118
 B = 1492.15
@@ -48,6 +57,155 @@ def kelvin_to_fahrenheit(K):
 
 def smooth(data, window=7):
     return np.convolve(data, np.ones(window)/window, mode='valid') if len(data) >= window else data
+
+# --- PLC Communication Class ---
+class PLCHeatingProfile:
+    """Class to handle Allen-Bradley PLC communication for heating profile data"""
+    
+    def __init__(self, ip_address="192.168.1.100"):
+        """
+        Initialize PLC connection
+        Args:
+            ip_address (str): IP address of the Allen-Bradley PLC
+        """
+        self.ip_address = ip_address
+        self.plc = None
+        self.connected = False
+        self.heating_profile = None
+        
+    def connect(self):
+        """Establish connection to PLC"""
+        if not PLC_AVAILABLE:
+            print("PLC library not available")
+            return False
+            
+        try:
+            self.plc = PLC()
+            self.plc.IPAddress = self.ip_address
+            # Test connection by reading a simple tag
+            test_read = self.plc.Read("Heat_Seq_Time_SP[1]")
+            if test_read.Status == "Success":
+                self.connected = True
+                print(f"✅ Connected to PLC at {self.ip_address}")
+                return True
+            else:
+                print(f"❌ Failed to connect to PLC: {test_read.Status}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ PLC connection error: {e}")
+            return False
+    
+    def disconnect(self):
+        """Close PLC connection"""
+        if self.plc:
+            try:
+                self.plc.Close()
+                self.connected = False
+                print("PLC connection closed")
+            except Exception as e:
+                print(f"Error closing PLC connection: {e}")
+    
+    def read_heating_profile(self):
+        """
+        Read the complete 15-step heating profile from PLC
+        Returns:
+            dict: Heating profile data or None if failed
+        """
+        if not self.connected:
+            if not self.connect():
+                return None
+        
+        try:
+            profile_data = {
+                'steps': [],
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            # Read data for all 15 steps
+            for step in range(1, 16):  # Steps 1-15
+                step_data = {}
+                
+                # Read time setpoint (INT)
+                time_tag = f"Heat_Seq_Time_SP[{step}]"
+                time_result = self.plc.Read(time_tag)
+                if time_result.Status == "Success":
+                    step_data['time_sp'] = time_result.Value
+                else:
+                    print(f"Failed to read {time_tag}: {time_result.Status}")
+                    step_data['time_sp'] = None
+                
+                # Read start temperature setpoint (INT)
+                start_temp_tag = f"Heat_Seq_Start_Temp_SP[{step}]"
+                start_temp_result = self.plc.Read(start_temp_tag)
+                if start_temp_result.Status == "Success":
+                    step_data['start_temp_sp'] = start_temp_result.Value
+                else:
+                    print(f"Failed to read {start_temp_tag}: {start_temp_result.Status}")
+                    step_data['start_temp_sp'] = None
+                
+                # Read end temperature setpoint (INT)
+                end_temp_tag = f"Heat_Seq_End_Temp_SP[{step}]"
+                end_temp_result = self.plc.Read(end_temp_tag)
+                if end_temp_result.Status == "Success":
+                    step_data['end_temp_sp'] = end_temp_result.Value
+                else:
+                    print(f"Failed to read {end_temp_tag}: {end_temp_result.Status}")
+                    step_data['end_temp_sp'] = None
+                
+                # Read vacuum setpoint (REAL)
+                vac_tag = f"Heat_Seq_Vac_SP[{step}]"
+                vac_result = self.plc.Read(vac_tag)
+                if vac_result.Status == "Success":
+                    step_data['vac_sp'] = vac_result.Value
+                else:
+                    print(f"Failed to read {vac_tag}: {vac_result.Status}")
+                    step_data['vac_sp'] = None
+                
+                step_data['step_number'] = step
+                profile_data['steps'].append(step_data)
+            
+            self.heating_profile = profile_data
+            print(f"✅ Successfully read heating profile with {len(profile_data['steps'])} steps")
+            return profile_data
+            
+        except Exception as e:
+            print(f"❌ Error reading heating profile: {e}")
+            return None
+    
+    def get_heating_curve_data(self):
+        """
+        Convert heating profile to time-temperature curve for plotting
+        Returns:
+            tuple: (time_points, temp_points) or (None, None) if no data
+        """
+        if not self.heating_profile:
+            return None, None
+        
+        try:
+            time_points = [0]  # Start at time 0
+            temp_points = []
+            
+            current_time = 0
+            
+            for step in self.heating_profile['steps']:
+                if step['time_sp'] is None or step['start_temp_sp'] is None or step['end_temp_sp'] is None:
+                    continue
+                
+                # Add start temperature at beginning of step
+                if len(temp_points) == 0:
+                    temp_points.append(step['start_temp_sp'])
+                
+                # Add end temperature at end of step
+                current_time += step['time_sp']
+                time_points.append(current_time)
+                temp_points.append(step['end_temp_sp'])
+            
+            return time_points, temp_points
+            
+        except Exception as e:
+            print(f"Error processing heating curve data: {e}")
+            return None, None
 
 class ThermalWidget(QLabel):
     """Custom widget for displaying thermal camera feed and handling ROI selection"""
@@ -179,6 +337,7 @@ class GraphWidget(FigureCanvas):
         self.maxs = []
         self.mins = []
         self.comparison_db = None
+        self.heating_profile_data = None
         
         # Adjust layout with better margins to prevent Y-axis cutoff
         self.figure.tight_layout(pad=2.0)
@@ -208,6 +367,10 @@ class GraphWidget(FigureCanvas):
             self.ax.clear()
             self.ax.plot(valid_timestamps, smooth_max, label="Current Max °F", color='#ff6b6b', linewidth=2)
             self.ax.plot(valid_timestamps, smooth_min, label="Current Min °F", color='#4ecdc4', linewidth=2)
+            
+            # Plot PLC heating curve if available
+            if self.heating_profile_data and len(valid_timestamps) > 0:
+                self.plot_heating_curve(valid_timestamps[0])
             
             # Plot comparison data if available
             if self.comparison_db and os.path.exists(self.comparison_db):
@@ -326,12 +489,57 @@ class GraphWidget(FigureCanvas):
         """Clear the comparison database"""
         self.comparison_db = None
 
+    def set_heating_profile(self, profile_data):
+        """Set the PLC heating profile data for display"""
+        self.heating_profile_data = profile_data
+
+    def plot_heating_curve(self, recording_start_time):
+        """Plot the PLC heating curve on the graph"""
+        if not self.heating_profile_data:
+            return
+            
+        try:
+            # Generate heating curve data points
+            time_points = []
+            temp_points = []
+            current_time = 0
+            
+            for step in self.heating_profile_data['steps']:
+                if (step.get('time_sp') is not None and 
+                    step.get('start_temp_sp') is not None and 
+                    step.get('end_temp_sp') is not None):
+                    
+                    # Add start point (if this is the first step)
+                    if len(temp_points) == 0:
+                        start_timestamp = recording_start_time
+                        time_points.append(start_timestamp)
+                        temp_points.append(float(step['start_temp_sp']))
+                    
+                    # Add end point
+                    current_time += step['time_sp'] * 60  # Convert minutes to seconds
+                    end_timestamp = recording_start_time + timedelta(seconds=current_time)
+                    time_points.append(end_timestamp)
+                    temp_points.append(float(step['end_temp_sp']))
+            
+            if len(time_points) >= 2:
+                # Plot the heating curve with interpolation
+                self.ax.plot(time_points, temp_points, 
+                           label="PLC Heating Profile", 
+                           color='#ffaa00', linewidth=2.5, linestyle='-', alpha=0.8)
+                
+                # Add markers for step transitions
+                self.ax.scatter(time_points[1:], temp_points[1:], 
+                              color='#ffaa00', s=30, alpha=0.9, zorder=5)
+                
+        except Exception as e:
+            print(f"Error plotting heating curve: {e}")
+
 class TestProfileTab(QWidget):
     """Tab for creating and managing test profiles"""
     
     def __init__(self):
         super().__init__()
-        self.profiles_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Test Profiles"
+        self.profiles_dir = os.path.join(os.getcwd(), "LD1_Test_Profiles")
         self.setup_ui()
         self.refresh_profiles()
     
@@ -952,7 +1160,7 @@ class TestProfileWizard(QDialog):
         
         # Save to file
         try:
-            profiles_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Test Profiles"
+            profiles_dir = os.path.join(os.getcwd(), "LD1_Test_Profiles")
             os.makedirs(profiles_dir, exist_ok=True)
             
             # Create safe filename
@@ -1460,7 +1668,7 @@ class DataAnalysisTab(QWidget):
     
     def __init__(self):
         super().__init__()
-        self.db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+        self.db_dir = os.path.join(os.getcwd(), "LD1_Cycle_Database")
         self.selected_databases = []
         self.setup_ui()
         self.refresh_database_list()
@@ -2014,7 +2222,7 @@ class DataAnalysisTab(QWidget):
                 report_df = pd.DataFrame(report_data)
                 
                 # Save report
-                csv_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle CSV(s)"
+                csv_dir = os.path.join(os.getcwd(), "LD1_Cycle_CSV")
                 os.makedirs(csv_dir, exist_ok=True)
                 
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -2072,7 +2280,7 @@ class DataAnalysisTab(QWidget):
                 df['database_file'] = os.path.basename(db_path)
                 
                 # Determine profile name from path
-                base_db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+                base_db_dir = os.path.join(os.getcwd(), "LD1_Cycle_Database")
                 rel_path = os.path.relpath(os.path.dirname(db_path), base_db_dir)
                 if rel_path == '.':
                     profile_name = "No_Profile"
@@ -2087,7 +2295,7 @@ class DataAnalysisTab(QWidget):
                 combined_df = pd.concat(combined_data, ignore_index=True)
                 
                 # Save combined CSV to a special subdirectory for combined analysis
-                base_csv_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle CSV(s)"
+                base_csv_dir = os.path.join(os.getcwd(), "LD1_Cycle_CSV")
                 csv_dir = os.path.join(base_csv_dir, "Combined_Analysis")
                 os.makedirs(csv_dir, exist_ok=True)
                 
@@ -2294,6 +2502,10 @@ class ModernThermalApp(QMainWindow):
         self.profile_variable_values = {}
         self.recording_profile_variables = {}  # Store profile variables for current recording session
         
+        # Initialize PLC connection
+        self.plc_heating = PLCHeatingProfile("192.168.1.100")  # Template IP
+        self.heating_profile_data = None
+        
         self.setup_ui()
         self.setup_camera()
         
@@ -2307,6 +2519,11 @@ class ModernThermalApp(QMainWindow):
         self.graph_timer = QTimer()
         self.graph_timer.timeout.connect(self.update_graph)
         self.graph_timer.start(1000)  # Update every second
+        
+        # Timer for PLC updates (check for changes every 30 seconds during recording)
+        self.plc_timer = QTimer()
+        self.plc_timer.timeout.connect(self.periodic_plc_update)
+        self.plc_timer.start(30000)  # Update every 30 seconds
         
         # Add keyboard shortcut for quick exit
         exit_shortcut = QShortcut(QKeySequence("Ctrl+Q"), self)
@@ -2325,7 +2542,7 @@ class ModernThermalApp(QMainWindow):
     def get_last_log_name(self, profile_name=None):
         """Get the most recent log name used for the current or specified profile"""
         try:
-            base_db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+            base_db_dir = os.path.join(os.getcwd(), "LD1_Cycle_Database")
             
             if profile_name:
                 safe_profile_name = self.get_safe_profile_name(profile_name)
@@ -2537,6 +2754,36 @@ class ModernThermalApp(QMainWindow):
         
         left_panel.addWidget(control_group)
         
+        # PLC Controls
+        plc_group = QGroupBox("PLC Heating Profile")
+        plc_layout = QGridLayout(plc_group)
+        
+        # PLC IP Address input
+        plc_ip_layout = QHBoxLayout()
+        plc_ip_layout.addWidget(QLabel("PLC IP:"))
+        self.plc_ip_input = QLineEdit()
+        self.plc_ip_input.setText("192.168.1.100")
+        self.plc_ip_input.setPlaceholderText("Enter PLC IP address")
+        plc_ip_layout.addWidget(self.plc_ip_input)
+        plc_layout.addLayout(plc_ip_layout, 0, 0, 1, 2)
+        
+        # PLC connection controls
+        self.plc_connect_btn = QPushButton("Connect PLC")
+        self.plc_connect_btn.clicked.connect(self.connect_plc)
+        plc_layout.addWidget(self.plc_connect_btn, 1, 0)
+        
+        self.plc_read_btn = QPushButton("Read Profile")
+        self.plc_read_btn.clicked.connect(self.read_plc_profile)
+        self.plc_read_btn.setEnabled(False)
+        plc_layout.addWidget(self.plc_read_btn, 1, 1)
+        
+        # PLC status
+        self.plc_status_label = QLabel("PLC Status: Disconnected")
+        self.plc_status_label.setStyleSheet("color: #ffd93d; font-size: 10px;")
+        plc_layout.addWidget(self.plc_status_label, 2, 0, 1, 2)
+        
+        left_panel.addWidget(plc_group)
+        
         # Log naming section and test profile selection
         log_group = QGroupBox("Recording Settings")
         log_layout = QVBoxLayout(log_group)
@@ -2630,7 +2877,7 @@ class ModernThermalApp(QMainWindow):
         self.profile_combo.clear()
         self.profile_combo.addItem("No Profile Selected", None)
         
-        profiles_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Test Profiles"
+        profiles_dir = os.path.join(os.getcwd(), "LD1_Test_Profiles")
         if not os.path.exists(profiles_dir):
             return
         
@@ -2897,12 +3144,64 @@ class ModernThermalApp(QMainWindow):
         angle = self.thermal_widget.rotate_view()
         self.status_label.setText(f"Status: View rotated to {angle}°")
 
+    def connect_plc(self):
+        """Connect/disconnect to PLC with user-specified IP address"""
+        if self.plc_heating.connected:
+            # Disconnect
+            self.plc_heating.disconnect()
+            self.plc_status_label.setText("PLC Status: Disconnected")
+            self.plc_status_label.setStyleSheet("color: #ffd93d; font-size: 10px;")
+            self.plc_connect_btn.setText("Connect PLC")
+            self.plc_read_btn.setEnabled(False)
+            return
+            
+        ip_address = self.plc_ip_input.text().strip()
+        if not ip_address:
+            self.show_warning("Warning", "Please enter a PLC IP address")
+            return
+            
+        # Update PLC IP address
+        self.plc_heating.ip_address = ip_address
+        
+        # Attempt connection
+        if self.plc_heating.connect():
+            self.plc_status_label.setText("PLC Status: Connected")
+            self.plc_status_label.setStyleSheet("color: #4ecdc4; font-size: 10px;")
+            self.plc_connect_btn.setText("Disconnect PLC")
+            self.plc_read_btn.setEnabled(True)
+            self.show_information("Success", f"Connected to PLC at {ip_address}")
+        else:
+            self.plc_status_label.setText("PLC Status: Connection Failed")
+            self.plc_status_label.setStyleSheet("color: #e74c3c; font-size: 10px;")
+            self.show_warning("Connection Failed", 
+                            f"Could not connect to PLC at {ip_address}.\n"
+                            "Recording will continue without PLC data.")
+
+    def read_plc_profile(self):
+        """Manually read PLC heating profile"""
+        profile_data = self.plc_heating.read_heating_profile()
+        
+        if profile_data:
+            self.heating_profile_data = profile_data
+            steps_count = len([s for s in profile_data['steps'] 
+                             if s.get('time_sp') is not None])
+            self.show_information("Success", 
+                                f"Read heating profile with {steps_count} valid steps")
+            
+            # Update graph if available
+            if hasattr(self, 'graph_widget'):
+                self.graph_widget.set_heating_profile(profile_data)
+        else:
+            self.show_warning("Read Failed", 
+                            "Could not read heating profile from PLC.\n"
+                            "Check PLC connection and tag names.")
+
     def toggle_recording(self):
         """Start/stop recording"""
         if not self.recording:
             # Start recording
             # Determine base directory and profile-specific subdirectory
-            base_db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+            base_db_dir = os.path.join(os.getcwd(), "LD1_Cycle_Database")
             
             if self.current_test_profile:
                 # Use test profile name for subdirectory
@@ -3143,13 +3442,26 @@ class ModernThermalApp(QMainWindow):
         """Initialize database for logging"""
         conn = sqlite3.connect(self.current_db)
         
-        # Create base readings table (only temperature data)
+        # Create base readings table with PLC data columns
         conn.execute("""
             CREATE TABLE IF NOT EXISTS readings (
                 timestamp TEXT,
                 temp_f_mean REAL,
                 temp_f_max REAL,
                 temp_f_min REAL
+            )
+        """)
+        
+        # Create PLC heating profile table for the complete heating cycle
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS plc_heating_profile (
+                step_number INTEGER,
+                time_sp INTEGER,
+                start_temp_sp INTEGER,
+                end_temp_sp INTEGER,
+                vac_sp REAL,
+                timestamp TEXT,
+                PRIMARY KEY (step_number, timestamp)
             )
         """)
         
@@ -3160,6 +3472,9 @@ class ModernThermalApp(QMainWindow):
                 value TEXT
             )
         """)
+        
+        # Read and store initial PLC heating profile
+        self.read_and_store_plc_data()
         
         # Store profile information and variables once
         if self.current_test_profile:
@@ -3178,6 +3493,120 @@ class ModernThermalApp(QMainWindow):
         conn.commit()
         conn.close()
 
+    def read_and_store_plc_data(self):
+        """Read PLC heating profile and store in database"""
+        if not self.current_db:
+            return
+            
+        try:
+            # Read heating profile from PLC
+            profile_data = self.plc_heating.read_heating_profile()
+            
+            if profile_data is None:
+                print("⚠️ Warning: Could not read PLC heating profile")
+                return
+                
+            # Store the profile data
+            self.heating_profile_data = profile_data
+            
+            # Store in database
+            conn = sqlite3.connect(self.current_db)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            for step_data in profile_data['steps']:
+                # Only store steps that have valid data
+                if (step_data.get('time_sp') is not None and 
+                    step_data.get('start_temp_sp') is not None and 
+                    step_data.get('end_temp_sp') is not None):
+                    
+                    conn.execute("""
+                        INSERT OR REPLACE INTO plc_heating_profile 
+                        (step_number, time_sp, start_temp_sp, end_temp_sp, vac_sp, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        step_data['step_number'],
+                        step_data['time_sp'],
+                        step_data['start_temp_sp'],
+                        step_data['end_temp_sp'],
+                        step_data.get('vac_sp', 0.0),
+                        timestamp
+                    ))
+            
+            conn.commit()
+            conn.close()
+            
+            print(f"✅ PLC heating profile stored successfully ({len(profile_data['steps'])} steps)")
+            
+            # Update graph with heating curve
+            if hasattr(self, 'graph_widget'):
+                self.graph_widget.set_heating_profile(profile_data)
+                
+        except Exception as e:
+            print(f"⚠️ Warning: PLC data read/store failed: {e}")
+
+    def periodic_plc_update(self):
+        """Periodically read PLC data during recording to catch any changes"""
+        if not self.recording or self.paused:
+            return
+            
+        try:
+            # Read current heating profile
+            current_profile = self.plc_heating.read_heating_profile()
+            
+            if current_profile is None:
+                return
+                
+            # Compare with stored profile to see if anything changed
+            if self.heating_profile_data:
+                changes_detected = False
+                for i, step in enumerate(current_profile['steps']):
+                    if i < len(self.heating_profile_data['steps']):
+                        old_step = self.heating_profile_data['steps'][i]
+                        
+                        # Check if key parameters changed
+                        if (step.get('time_sp') != old_step.get('time_sp') or
+                            step.get('start_temp_sp') != old_step.get('start_temp_sp') or
+                            step.get('end_temp_sp') != old_step.get('end_temp_sp') or
+                            step.get('vac_sp') != old_step.get('vac_sp')):
+                            changes_detected = True
+                            break
+                
+                if changes_detected:
+                    print("🔄 PLC heating profile changes detected, updating database...")
+                    self.heating_profile_data = current_profile
+                    
+                    # Update database with new profile
+                    conn = sqlite3.connect(self.current_db)
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    for step_data in current_profile['steps']:
+                        if (step_data.get('time_sp') is not None and 
+                            step_data.get('start_temp_sp') is not None and 
+                            step_data.get('end_temp_sp') is not None):
+                            
+                            conn.execute("""
+                                INSERT OR REPLACE INTO plc_heating_profile 
+                                (step_number, time_sp, start_temp_sp, end_temp_sp, vac_sp, timestamp)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                            """, (
+                                step_data['step_number'],
+                                step_data['time_sp'],
+                                step_data['start_temp_sp'],
+                                step_data['end_temp_sp'],
+                                step_data.get('vac_sp', 0.0),
+                                timestamp
+                            ))
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                    # Update graph
+                    if hasattr(self, 'graph_widget'):
+                        self.graph_widget.set_heating_profile(current_profile)
+                        
+        except Exception as e:
+            print(f"⚠️ Warning: Periodic PLC update failed: {e}")
+
     def export_csv(self):
         """Export recorded data to CSV"""
         if not self.current_db or not self.recording_started:
@@ -3193,7 +3622,7 @@ class ModernThermalApp(QMainWindow):
             import pandas as pd
             
             # Determine CSV directory based on test profile
-            base_csv_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle CSV(s)"
+            base_csv_dir = os.path.join(os.getcwd(), "LD1_Cycle_CSV")
             
             if self.current_test_profile:
                 # Use test profile name for subdirectory
@@ -3214,6 +3643,13 @@ class ModernThermalApp(QMainWindow):
             # Read temperature data
             conn = sqlite3.connect(self.current_db)
             df = pd.read_sql_query("SELECT * FROM readings", conn)
+            
+            # Read PLC heating profile data
+            plc_df = None
+            try:
+                plc_df = pd.read_sql_query("SELECT * FROM plc_heating_profile ORDER BY step_number", conn)
+            except:
+                pass  # Table might not exist if no PLC data was recorded
             
             # Get session info (profile variables stored once)
             session_info = {}
@@ -3240,7 +3676,16 @@ class ModernThermalApp(QMainWindow):
                     for var_name, var_value in session_info.items():
                         csvfile.write(f"# {var_name}: {var_value}\n")
                     csvfile.write("#\n")
-                    csvfile.write("# Temperature Readings:\n")
+                
+                # Write PLC heating profile data as comments
+                if plc_df is not None and not plc_df.empty:
+                    csvfile.write("# PLC Heating Profile:\n")
+                    csvfile.write("# Step, Time(min), Start Temp, End Temp, Vacuum\n")
+                    for _, row in plc_df.iterrows():
+                        csvfile.write(f"# {row['step_number']}, {row['time_sp']}, {row['start_temp_sp']}, {row['end_temp_sp']}, {row['vac_sp']}\n")
+                    csvfile.write("#\n")
+                
+                csvfile.write("# Temperature Readings:\n")
                 
                 # Write the temperature data only
                 df.to_csv(csvfile, index=False)
@@ -3264,7 +3709,7 @@ class ModernThermalApp(QMainWindow):
 
     def select_comparison_db(self):
         """Select a database file to compare against"""
-        base_db_dir = r"P:\Plant Engineering\Lab\Lab Dryer 1\LD1 Cycle Database"
+        base_db_dir = os.path.join(os.getcwd(), "LD1_Cycle_Database")
         
         if not os.path.exists(base_db_dir):
             msg_box = self.create_styled_message_box(
@@ -3356,12 +3801,22 @@ class ModernThermalApp(QMainWindow):
         if hasattr(self, 'graph_timer'):
             self.graph_timer.stop()
             print("Graph timer stopped")
+            
+        # Stop the PLC update timer
+        if hasattr(self, 'plc_timer'):
+            self.plc_timer.stop()
+            print("PLC timer stopped")
         
         # Stop recording if active
         if self.recording:
             self.recording = False
             self.paused = False
             print("Recording stopped")
+            
+        # Disconnect PLC
+        if hasattr(self, 'plc_heating') and self.plc_heating:
+            self.plc_heating.disconnect()
+            print("PLC disconnected")
         
         # Stop the camera worker cleanly
         if hasattr(self, 'camera_worker') and self.camera_worker:
