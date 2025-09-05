@@ -495,45 +495,77 @@ class GraphWidget(FigureCanvas):
         self.heating_profile_data = profile_data
 
     def plot_heating_curve(self, recording_start_time):
-        """Plot the PLC heating curve on the graph"""
+        """Plot the PLC heating curve scaled to match current recording duration"""
         if not self.heating_profile_data:
             return
             
         try:
-            # Generate heating curve data points
-            time_points = []
-            temp_points = []
-            current_time = 0
+            # First, calculate the total duration of the heating profile
+            total_profile_time = 0
+            valid_steps = []
             
             for step in self.heating_profile_data['steps']:
                 if (step.get('time_sp') is not None and 
                     step.get('start_temp_sp') is not None and 
                     step.get('end_temp_sp') is not None):
-                    
-                    # Add start point (if this is the first step)
-                    if len(temp_points) == 0:
-                        start_timestamp = recording_start_time
-                        time_points.append(start_timestamp)
-                        temp_points.append(float(step['start_temp_sp']))
-                    
-                    # Add end point
-                    current_time += step['time_sp'] * 60  # Convert minutes to seconds
-                    end_timestamp = recording_start_time + timedelta(seconds=current_time)
-                    time_points.append(end_timestamp)
-                    temp_points.append(float(step['end_temp_sp']))
+                    valid_steps.append(step)
+                    total_profile_time += step['time_sp']
+            
+            if not valid_steps or total_profile_time <= 0:
+                return
+            
+            # Get current recording duration
+            current_time = datetime.now()
+            recording_duration_seconds = (current_time - recording_start_time).total_seconds()
+            
+            # If we have less than 30 seconds of recording, use a minimum window
+            if recording_duration_seconds < 30:
+                recording_duration_seconds = 30
+            
+            # Calculate scaling factor
+            total_profile_seconds = total_profile_time * 60  # Convert minutes to seconds
+            scale_factor = recording_duration_seconds / total_profile_seconds
+            
+            # Generate scaled heating curve data points
+            time_points = []
+            temp_points = []
+            current_scaled_time = 0
+            
+            # Add start point
+            time_points.append(recording_start_time)
+            temp_points.append(float(valid_steps[0]['start_temp_sp']))
+            
+            for step in valid_steps:
+                # Scale the step time and add end point
+                step_duration = step['time_sp'] * 60 * scale_factor  # Convert to seconds and scale
+                current_scaled_time += step_duration
+                end_timestamp = recording_start_time + timedelta(seconds=current_scaled_time)
+                time_points.append(end_timestamp)
+                temp_points.append(float(step['end_temp_sp']))
             
             if len(time_points) >= 2:
-                # Plot the heating curve with interpolation
+                # Plot the scaled heating curve with interpolation
                 self.ax.plot(time_points, temp_points, 
-                           label="PLC Heating Profile", 
+                           label=f"PLC Heating Profile (Scaled)", 
                            color='#ffaa00', linewidth=2.5, linestyle='-', alpha=0.8)
                 
                 # Add markers for step transitions
                 self.ax.scatter(time_points[1:], temp_points[1:], 
                               color='#ffaa00', s=30, alpha=0.9, zorder=5)
                 
+                # Add text annotation showing original vs scaled duration
+                total_hours = total_profile_time / 60
+                scaled_hours = recording_duration_seconds / 3600
+                annotation_text = f"Original: {total_hours:.1f}h → Scaled: {scaled_hours:.1f}h"
+                
+                # Position annotation in upper right
+                self.ax.text(0.98, 0.02, annotation_text, transform=self.ax.transAxes,
+                           fontsize=8, color='#ffaa00', alpha=0.8,
+                           horizontalalignment='right', verticalalignment='bottom',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))
+                
         except Exception as e:
-            print(f"Error plotting heating curve: {e}")
+            print(f"Error plotting scaled heating curve: {e}")
 
 class TestProfileTab(QWidget):
     """Tab for creating and managing test profiles"""
